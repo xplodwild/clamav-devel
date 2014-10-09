@@ -1,47 +1,14 @@
 dnl Check for PCRE
 
 dnl determine the home of pcre
-PCRE_HOME=""
-AC_ARG_WITH([pcre],
-[  --with-pcre=DIR        path to directory containing libpcre library (default=
-                          /usr/local or /usr if not found in /usr/local)],
-[
-  AC_MSG_CHECKING([for libpcre installation])
-  case "$withval" in
-  no)
-    AC_MSG_RESULT([no])
-    ;;
-  yes)
-    PCRE_HOME=/usr/local
-    if test ! -x "$PCRE_HOME/bin/pcre-config"; then
-      PCRE_HOME=/usr
-      if test ! -x "$PCRE_HOME/bin/pcre-config"; then
-        PCRE_HOME=""
-        AC_MSG_ERROR([cannot locate libpcre at /usr/local or /usr])
-      fi
-    fi
-    ;;
-  "")
-    AC_MSG_ERROR([cannot assign blank value to --with-pcre])
-    ;;
-  *)
-    PCRE_HOME="$withval"
-    if test ! -x "$PCRE_HOME/bin/pcre-config"; then
-      PCRE_HOME=""
-      AC_MSG_ERROR([cannot locate libpcre at $withval])
-    fi
-    ;;
-  esac
-
-  if test "x$PCRE_HOME" != "x"; then
-    AC_MSG_RESULT([using $PCRE_HOME])
-  else
-    AC_MSG_RESULT([not found])
+PCRE_HOME=/usr/local
+if test ! -x "$PCRE_HOME/bin/pcre-config"; then
+  PCRE_HOME=/usr
+  if test ! -x "$PCRE_HOME/bin/pcre-config"; then
+    PCRE_HOME=""
+    AC_MSG_ERROR([cannot locate libpcre at /usr/local or /usr])
   fi
-],[
-dnl --with-pcre not specified
-  PCRE_HOME=""
-])
+fi
 
 dnl if pcre has a home, then check if it is valid and get flags
 found_pcre="no"
