@@ -886,7 +886,6 @@ enable_xml
 with_xml
 with_openssl
 with_libjson
-with_pcre
 enable_maintainer_mode
 with_zlib
 enable_zlib_vcheck
@@ -1614,8 +1613,6 @@ Optional Packages:
     /usr/local or /usr if not found in /usr/local)
   --with-libjson=DIR   path to directory containing libjson (default=
     /usr/local or /usr if not found in /usr/local)
-  --with-pcre=DIR        path to directory containing libpcre library (default=
-                          /usr/local or /usr if not found in /usr/local)
   --with-zlib=DIR	  path to directory containing zlib library (default=
 			  /usr/local or /usr if not found in /usr/local)
   --with-libbz2-prefix[=DIR]  search for libbz2 in DIR/include and DIR/lib
@@ -17312,54 +17309,14 @@ LIBS="$save_LIBS"
 
 
 
-PCRE_HOME=""
-
-# Check whether --with-pcre was given.
-if test "${with_pcre+set}" = set; then :
-  withval=$with_pcre;
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for libpcre installation" >&5
-$as_echo_n "checking for libpcre installation... " >&6; }
-  case "$withval" in
-  no)
-    { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-    ;;
-  yes)
-    PCRE_HOME=/usr/local
-    if test ! -x "$PCRE_HOME/bin/pcre-config"; then
-      PCRE_HOME=/usr
-      if test ! -x "$PCRE_HOME/bin/pcre-config"; then
-        PCRE_HOME=""
-        as_fn_error $? "cannot locate libpcre at /usr/local or /usr" "$LINENO" 5
-      fi
-    fi
-    ;;
-  "")
-    as_fn_error $? "cannot assign blank value to --with-pcre" "$LINENO" 5
-    ;;
-  *)
-    PCRE_HOME="$withval"
-    if test ! -x "$PCRE_HOME/bin/pcre-config"; then
-      PCRE_HOME=""
-      as_fn_error $? "cannot locate libpcre at $withval" "$LINENO" 5
-    fi
-    ;;
-  esac
-
-  if test "x$PCRE_HOME" != "x"; then
-    { $as_echo "$as_me:${as_lineno-$LINENO}: result: using $PCRE_HOME" >&5
-$as_echo "using $PCRE_HOME" >&6; }
-  else
-    { $as_echo "$as_me:${as_lineno-$LINENO}: result: not found" >&5
-$as_echo "not found" >&6; }
+PCRE_HOME=/usr/local
+if test ! -x "$PCRE_HOME/bin/pcre-config"; then
+  PCRE_HOME=/usr
+  if test ! -x "$PCRE_HOME/bin/pcre-config"; then
+    PCRE_HOME=""
+    as_fn_error $? "cannot locate libpcre at /usr/local or /usr" "$LINENO" 5
   fi
-
-else
-
-  PCRE_HOME=""
-
 fi
-
 
 found_pcre="no"
 PCRECONF_VERSION=""
