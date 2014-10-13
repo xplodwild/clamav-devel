@@ -95,7 +95,7 @@ static Value *GetUnderlyingObject(Value *P, TargetData *TD)
 
 namespace llvm {
   class PtrVerifier;
-#if LLVM_VERSION >= 30
+#if LLVM_VERSION >= 29
   void initializePtrVerifierPass(PassRegistry&);
 #endif
 
@@ -106,9 +106,9 @@ namespace llvm {
       CallGraphNode *rootNode;
   public:
       static char ID;
-      DEFINEPASS(PtrVerifier), rootNode(0), PT(), TD(), SE(), DT(),
-          AbrtBB(), Changed(false), valid(false), EP() {
-#if LLVM_VERSION >= 30
+      DEFINEPASS(PtrVerifier), rootNode(0), PT(), TD(), SE(), expander(),
+          DT(), AbrtBB(), Changed(false), valid(false), EP() {
+#if LLVM_VERSION >= 29
           initializePtrVerifierPass(*PassRegistry::getPassRegistry());
 #endif
       }
@@ -851,7 +851,7 @@ namespace llvm {
     char PtrVerifier::ID;
 
 } /* end namespace llvm */
-#if LLVM_VERSION >= 30
+#if LLVM_VERSION >= 29
 INITIALIZE_PASS_BEGIN(PtrVerifier, "", "", false, false)
 #if LLVM_VERSION < 32
 INITIALIZE_PASS_DEPENDENCY(TargetData)
