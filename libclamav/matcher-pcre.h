@@ -45,6 +45,7 @@ struct cli_pcre_off {
 #define PCRE_BYPASS "7374756c747a676574737265676578"
 #define CLI_PCRE_GLOBAL    0x00000001 /* g */
 #define CLI_PCRE_ENCOMPASS 0x00000002 /* e */
+#define CLI_PCRE_ROLLING   0x00000004 /* r */
 
 #define CLI_PCRE_DISABLED  0x80000000 /* used for dconf or fail to build */
 
@@ -59,6 +60,7 @@ struct cli_pcre_meta {
     /* internal flags (bitfield?) */
     uint32_t flags;
     /* performance tracking */
+    char *statname; /* freed by us, not cli_events_free */
     uint32_t sigtime_id, sigmatch_id;
 };
 

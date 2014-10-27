@@ -55,10 +55,10 @@
 cli_events_t *p_sigevents = NULL;
 unsigned int p_sigid = 0;
 
-static void pcre_perf_events_init(struct cli_pcre_meta *pm)
+static void pcre_perf_events_init(struct cli_pcre_meta *pm, const char *virname)
 {
     int ret;
-    char *pcre_name = NULL;
+    size_t namelen = strlen(virname)+strlen(pm->pdata.expression)+3;
 
     if (!p_sigevents) {
         p_sigevents = cli_events_new(MAX_PCRE_SIGEVENT_ID);
@@ -73,14 +73,21 @@ static void pcre_perf_events_init(struct cli_pcre_meta *pm)
         return;
     }
 
-    /* set the name */
-    pcre_name = pm->pdata.expression;
+    if (!virname)
+        virname = "(null)";
 
-    pm_dbgmsg("pcre_perf: adding sig ids starting %u for %s\n", p_sigid, pcre_name);
+    /* set the name */
+    pm->statname = cli_calloc(1, namelen);
+    if (!pm->statname) {
+        return;
+    }
+    snprintf(pm->statname, namelen, "%s/%s/", virname, pm->pdata.expression);
+
+    pm_dbgmsg("pcre_perf: adding sig ids starting %u for %s\n", p_sigid, pm->statname);
 
     /* register time event */
     pm->sigtime_id = p_sigid;
-    ret = cli_event_define(p_sigevents, p_sigid++, pcre_name, ev_time, multiple_sum);
+    ret = cli_event_define(p_sigevents, p_sigid++, pm->statname, ev_time, multiple_sum);
     if (ret) {
         cli_errmsg("pcre_perf: cli_event_define() error for time event id %d\n", pm->sigtime_id);
         pm->sigtime_id = MAX_PCRE_SIGEVENT_ID+1;
@@ -89,7 +96,7 @@ static void pcre_perf_events_init(struct cli_pcre_meta *pm)
 
     /* register match count */
     pm->sigmatch_id = p_sigid;
-    ret = cli_event_define(p_sigevents, p_sigid++, pcre_name, ev_int, multiple_sum);
+    ret = cli_event_define(p_sigevents, p_sigid++, pm->statname, ev_int, multiple_sum);
     if (ret) {
         cli_errmsg("pcre_perf: cli_event_define() error for matches event id %d\n", pm->sigmatch_id);
         pm->sigmatch_id = MAX_PCRE_SIGEVENT_ID+1;
@@ -146,6 +153,8 @@ void cli_pcre_perf_print()
         elem++;
         elems++;
     }
+    if (max_name_len < strlen("PCRE Expression"))
+        max_name_len = strlen("PCRE Expression");
 
     cli_qsort(stats, elems, sizeof(struct sigperf_elem), sigelem_comp);
 
@@ -297,6 +306,7 @@ int cli_pcre_addpatt(struct cli_matcher *root, const char *virname, const char *
             /* handle matcher specific options here */
             switch (*opt) {
             case 'g':  pm->flags |= CLI_PCRE_GLOBAL;            break;
+            case 'r':  pm->flags |= CLI_PCRE_ROLLING;           break;
             case 'e':  pm->flags |= CLI_PCRE_ENCOMPASS;         break;
             default:
                 cli_errmsg("cli_pcre_addpatt: unknown/extra pcre option encountered %c\n", *opt);
@@ -309,7 +319,8 @@ int cli_pcre_addpatt(struct cli_matcher *root, const char *virname, const char *
 
         if (pm->flags) {
             pm_dbgmsg("Matcher:  %s%s\n",
-                      pm->flags & CLI_PCRE_GLOBAL ? "CLAMAV_PCRE_GLOBAL " : "",
+                      pm->flags & CLI_PCRE_GLOBAL ? "CLAMAV_GLOBAL " : "",
+                      pm->flags & CLI_PCRE_ROLLING ? "CLAMAV_ROLLING " : "",
                       pm->flags & CLI_PCRE_ENCOMPASS ? "CLAMAV_ENCOMPASS " : "");
         }
         else
@@ -332,7 +343,7 @@ int cli_pcre_addpatt(struct cli_matcher *root, const char *virname, const char *
 
     /* add metadata to the performance tracker */
     if (options & CL_DB_PCRE_STATS)
-        pcre_perf_events_init(pm);
+        pcre_perf_events_init(pm, virname);
 
     /* add pcre data to root after reallocation */
     pcre_count = root->pcre_metas+1;
@@ -360,7 +371,7 @@ int cli_pcre_build(struct cli_matcher *root, long long unsigned match_limit, lon
     struct cli_pcre_meta *pm = NULL;
     int disable_all = 0;
 
-    if (dconf && (dconf->pcre & PCRE_CONF_SUPPORT))
+    if (dconf && !(dconf->pcre & PCRE_CONF_SUPPORT))
         disable_all = 1;
 
     for (i = 0; i < root->pcre_metas; ++i) {
@@ -445,6 +456,9 @@ int cli_pcre_recaloff(struct cli_matcher *root, struct cli_pcre_off *data, struc
         return CL_EMEM;
     }
 
+    pm_dbgmsg("CLI_OFF_NONE: %u\n", CLI_OFF_NONE);
+    pm_dbgmsg("CLI_OFF_ANY: %u\n", CLI_OFF_ANY);
+
     /* iterate across all pcre metadata and recalc offsets */
     for (i = 0; i < root->pcre_metas; ++i) {
         pm = root->pcre_metatable[i];
@@ -452,19 +466,19 @@ int cli_pcre_recaloff(struct cli_matcher *root, struct cli_pcre_off *data, struc
         /* skip broken pcres, not getting executed anyways */
         if (pm->flags & CLI_PCRE_DISABLED) {
             data->offset[i] = CLI_OFF_NONE;
-            data->shift[i] = CLI_OFF_NONE;
+            data->shift[i] = 0;
             continue;
         }
 
         if (pm->offdata[0] == CLI_OFF_ANY) {
-            data->offset[i] = 0;
+            data->offset[i] = CLI_OFF_ANY;
+            data->shift[i] = 0;
+        }
+        else if (pm->offdata[0] == CLI_OFF_NONE) {
+            data->offset[i] = CLI_OFF_NONE;
             data->shift[i] = 0;
         }
         else if (pm->offdata[0] == CLI_OFF_ABSOLUTE) {
-            data->offset[i] = pm->offdata[1];
-            data->shift[i] = pm->offdata[2];
-        }
-        else if (pm->offdata[0] == CLI_OFF_EOF_MINUS) {
             data->offset[i] = pm->offdata[1];
             data->shift[i] = pm->offdata[2];
         }
@@ -476,8 +490,19 @@ int cli_pcre_recaloff(struct cli_matcher *root, struct cli_pcre_off *data, struc
                 free(data->offset);
                 return ret;
             }
-            data->shift[i] = endoff-(data->offset[i]);
+            /* CLI_OFF_NONE gets passed down, CLI_OFF_ANY gets reinterpreted */
+            /* TODO - CLI_OFF_VERSION is interpreted as CLI_OFF_ANY(?) */
+            if (data->offset[i] == CLI_OFF_ANY) {
+                data->offset[i] = CLI_OFF_ANY;
+                data->shift[i] = 0;
+            }
+            else {
+                data->shift[i] = endoff-(data->offset[i]);
+            }
         }
+
+        pm_dbgmsg("%u: %u %u->%u(+%u)\n", i, pm->offdata[0], data->offset[i],
+                  data->offset[i]+data->shift[i], data->shift[i]);
     }
 
     return CL_SUCCESS;
@@ -493,6 +518,36 @@ void cli_pcre_freeoff(struct cli_pcre_off *data)
     }
 }
 
+int cli_pcre_qoff(struct cli_pcre_meta *pm, uint32_t length, uint32_t *adjbuffer, uint32_t *adjshift)
+{
+    if (!pm)
+        return CL_ENULLARG;
+
+    /* default to scanning whole buffer but try to use existing offdata */
+    if (pm->offdata[0] == CLI_OFF_NONE) {
+        return CL_BREAK;
+    }
+    else if (pm->offdata[0] == CLI_OFF_ANY) {
+        *adjbuffer = CLI_OFF_ANY;
+        *adjshift = 0;
+    }
+    else if (pm->offdata[0] == CLI_OFF_ABSOLUTE) {
+        *adjbuffer = pm->offdata[1];
+        *adjshift = pm->offdata[2];
+    }
+    else if (pm->offdata[0] == CLI_OFF_EOF_MINUS) {
+        *adjbuffer = length - pm->offdata[1];
+        *adjshift = pm->offdata[2];
+    }
+    else {
+        /* all relative offsets; TODO - check if relative offsets apply for normal hex substrs */
+        *adjbuffer = 0;
+        *adjshift = 0;
+    }
+
+    return CL_SUCCESS;
+}
+
 int cli_pcre_scanbuf(const unsigned char *buffer, uint32_t length, const struct cli_matcher *root, struct cli_ac_data *mdata, struct cli_ac_result **res, const struct cli_pcre_off *data, cli_ctx *ctx)
 {
     struct cli_pcre_meta **metatable = root->pcre_metatable, *pm = NULL;
@@ -501,21 +556,14 @@ int cli_pcre_scanbuf(const unsigned char *buffer, uint32_t length, const struct 
     uint32_t adjbuffer, adjshift, adjlength;
     unsigned int i, evalcnt;
     uint64_t evalids, maxfilesize;
-    uint32_t global, encompass;
-    int rc, offset, ovector[OVECCOUNT];
+    uint32_t global, encompass, rolling;
+    int rc, offset, options=0, ovector[OVECCOUNT];
 
     if ((!root->pcre_metatable) || (ctx && ctx->dconf && !(ctx->dconf->pcre & PCRE_CONF_SUPPORT))) {
         return CL_SUCCESS;
     }
 
-    /* check that scanned buffer does not exceed pcre filesize limit */
-    maxfilesize = (uint64_t)cl_engine_get_num(ctx->engine, CL_ENGINE_PCRE_MAX_FILESIZE, &rc);
-    if (rc != CL_SUCCESS)
-        return rc;
-    if (maxfilesize && (length > maxfilesize)) {
-        cli_dbgmsg("cli_pcre_scanbuf: pcre max filesize exceeded (limit: %llu, needed: %u)\n", maxfilesize, length);
-        return CL_EMAXSIZE;
-    }
+    /* NOTE: moved pcre maxfilesize limit check to caller [matcher_run] */
 
     for (i = 0; i < root->pcre_metas; ++i) {
         pm = root->pcre_metatable[i];
@@ -524,6 +572,12 @@ int cli_pcre_scanbuf(const unsigned char *buffer, uint32_t length, const struct 
         /* skip checking and running disabled pcres */
         if (pm->flags & CLI_PCRE_DISABLED) {
             cli_dbgmsg("cli_pcre_scanbuf: skipping disabled regex /%s/\n", pd->expression);
+            continue;
+        }
+
+        /* skip checking and running CLI_OFF_NONE pcres */
+        if (data && data->offset[i] == CLI_OFF_NONE) {
+            pm_dbgmsg("cli_pcre_scanbuf: skipping CLI_OFF_NONE regex /%s/\n", pd->expression);
             continue;
         }
 
@@ -541,39 +595,32 @@ int cli_pcre_scanbuf(const unsigned char *buffer, uint32_t length, const struct 
             /* fall-through to unconditional execution - sigtool-only */
         }
 
-        global = (pm->flags & CLI_PCRE_GLOBAL);       /* search for all matches */
+        global = (pm->flags & CLI_PCRE_GLOBAL);       /* globally search for all matches (within bounds) */
         encompass = (pm->flags & CLI_PCRE_ENCOMPASS); /* encompass search to offset->offset+maxshift */
+        rolling = (pm->flags & CLI_PCRE_ROLLING);     /* rolling search (unanchored) */
         offset = pd->search_offset;                   /* this is usually 0 */
 
-        cli_dbgmsg("cli_pcre_scanbuf: triggered %s; running regex /%s/%s\n", pm->trigger, pd->expression, global ? " (global)":"");
+        cli_dbgmsg("cli_pcre_scanbuf: triggered %s; running regex /%s/%s%s\n", pm->trigger, pd->expression, 
+                   global ? " (global)":"", rolling ? " (rolling)":"");
 
         /* adjust the buffer sent to cli_pcre_match for offset and maxshift */
         if (!data) {
-            /* default to scanning whole buffer but try to use existing offdata */
-            if (pm->offdata[0] == CLI_OFF_ABSOLUTE) {
-                adjbuffer = pm->offdata[1];
-                adjshift = pm->offdata[2];
-            }
-            else if (pm->offdata[0] == CLI_OFF_EOF_MINUS) {
-                if (length > pm->offdata[1]) {
-                    adjbuffer = length - pm->offdata[1];
-                    adjshift = pm->offdata[2];
-                }
-                else {
-                    /* EOF is invalid */
-                    continue;
-                }
-            }
-            else {
-                /* you could call cli_caloff here but you should call cli_pcre_recaloff prior within the caller */
-                adjbuffer = 0;
-                adjshift = 0;
-            }
+            if (cli_pcre_qoff(pm, length, &adjbuffer, &adjshift) != CL_SUCCESS)
+                continue;
         }
         else {
             adjbuffer = data->offset[i];
             adjshift = data->shift[i];
         }
+
+        /* check for need to anchoring */
+        if (!rolling && !adjshift && (adjbuffer != CLI_OFF_ANY))
+            options |= PCRE_ANCHORED;
+        else
+            options = 0;
+
+        if (adjbuffer == CLI_OFF_ANY)
+            adjbuffer = 0;
 
         /* check the offset bounds */
         if (adjbuffer < length) {
@@ -585,12 +632,13 @@ int cli_pcre_scanbuf(const unsigned char *buffer, uint32_t length, const struct 
                         adjlength = adjshift;
             }
             else {
+                /* NOTE - if using non-encompass method 2, alter shift universally */
                 adjlength = length - adjbuffer;
             }
         }
         else {
-            /* starting offset is outside bounds of file, skip pcre execution */
-            cli_dbgmsg("cli_pcre_scanbuf: starting offset is outside bounds of file %u >= %u\n", adjbuffer, length);
+            /* starting offset is outside bounds of file, skip pcre execution silently */
+            pm_dbgmsg("cli_pcre_scanbuf: starting offset is outside bounds of file %u >= %u\n", adjbuffer, length);
             continue;
         }
 
@@ -600,7 +648,7 @@ int cli_pcre_scanbuf(const unsigned char *buffer, uint32_t length, const struct 
         do {
             /* performance metrics */
             cli_event_time_start(p_sigevents, pm->sigtime_id);
-            rc = cli_pcre_match(pd, buffer+adjbuffer, adjlength, offset, 0, ovector, OVECCOUNT);
+            rc = cli_pcre_match(pd, buffer+adjbuffer, adjlength, offset, options, ovector, OVECCOUNT);
             cli_event_time_stop(p_sigevents, pm->sigtime_id);
             /* if debug, generate a match report */
             if (cli_debug_flag)
@@ -690,6 +738,11 @@ void cli_pcre_freemeta(struct cli_pcre_meta *pm)
     if (pm->virname) {
         free(pm->virname);
         pm->virname = NULL;
+    }
+
+    if (pm->statname) {
+        free(pm->statname);
+        pm->statname = NULL;
     }
 
     cli_pcre_free_single(&(pm->pdata));
