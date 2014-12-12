@@ -1064,7 +1064,7 @@ int recvloop_th(int *socketds, unsigned nsockets, struct cl_engine *engine, unsi
 	if((fd = fopen(opt->strarg, "w")) == NULL) {
 	    logg("!Can't save PID in file %s\n", opt->strarg);
 	} else {
-	    if (fprintf(fd, "%u", (unsigned int) mainpid)<0) {
+	    if (fprintf(fd, "%u\n", (unsigned int) mainpid)<0) {
 	    	logg("!Can't save PID in file %s\n", opt->strarg);
 	    }
 	    fclose(fd);
@@ -1471,6 +1471,7 @@ int recvloop_th(int *socketds, unsigned nsockets, struct cl_engine *engine, unsi
 	pthread_kill(fan_pid, SIGUSR1);
 	pthread_mutex_unlock(&logg_mutex);
 	pthread_join(fan_pid, NULL);
+    free(tharg);
     }
 #endif
     if(engine) {

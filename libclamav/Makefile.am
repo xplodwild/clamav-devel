@@ -446,6 +446,8 @@ libclamav_la_SOURCES = \
 	matcher-pcre.h \
 	regex_pcre.c \
 	regex_pcre.h
+	msdoc.c \
+	msdoc.h
 
 libclamav_la_SOURCES += bignum.h\
 	bignum_fast.h\
