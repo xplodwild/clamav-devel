@@ -447,7 +447,7 @@ libclamav_la_SOURCES = \
 	matcher-pcre.c \
 	matcher-pcre.h \
 	regex_pcre.c \
-	regex_pcre.h
+	regex_pcre.h \
 	msdoc.c \
 	msdoc.h
 
