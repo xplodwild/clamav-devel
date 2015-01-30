@@ -28229,8 +28229,8 @@ cat <<EOF
               pthreads    : $have_pthreads ($THREAD_LIBS)
 EOF
 
-{ $as_echo "$as_me:${as_lineno-$LINENO}: Summary of miscellaneous  features" >&5
-$as_echo "$as_me: Summary of miscellaneous  features" >&6;}
+{ $as_echo "$as_me:${as_lineno-$LINENO}: Summary of miscellaneous features" >&5
+$as_echo "$as_me: Summary of miscellaneous features" >&6;}
 if test "x$CHECK_LIBS" = "x"; then
     check_libs="no"
 else
@@ -28347,8 +28347,8 @@ else
 fi
 
 
-{ $as_echo "$as_me:${as_lineno-$LINENO}: Summary of engine performance features)" >&5
-$as_echo "$as_me: Summary of engine performance features)" >&6;}
+{ $as_echo "$as_me:${as_lineno-$LINENO}: Summary of engine performance features" >&5
+$as_echo "$as_me: Summary of engine performance features" >&6;}
 if test "x$enable_debug" = "xyes"; then
 
 
