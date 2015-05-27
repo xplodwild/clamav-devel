@@ -17619,7 +17619,7 @@ if test "x$found_pcre" != "xno"; then
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pcre.h in $PCRE_HOME" >&5
 $as_echo_n "checking for pcre.h in $PCRE_HOME... " >&6; }
 
-  if test ! -f "$XML_HOME/include/pcre.h"; then
+  if test ! -f "$PCRE_HOME/include/pcre.h"; then
     { $as_echo "$as_me:${as_lineno-$LINENO}: result: not found" >&5
 $as_echo "not found" >&6; }
   else
