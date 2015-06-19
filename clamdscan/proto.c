@@ -341,6 +341,15 @@ int dsresult(int sockd, int scantype, const char *filename, int *printok, int *e
 		    else
 			logg("~%s\n", bol);
 		}
+	    } else if(!memcmp(eol-4, " OK", 3)) {
+		*(eol - 4) = 0;
+		*printok = 0;
+		if(filename) {
+		    if(scantype >= STREAM)
+			logg("~%s%sOK\n", filename, colon);
+		    else
+			logg("~%sOK\n", bol);
+		}
 	    }
 	}
     }

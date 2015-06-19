@@ -292,6 +292,12 @@ int scan_callback(STATBUF *sb, char *filename, const char *msg, enum cli_ftw_rea
 	}
 	logg("~%s: %s ERROR\n", filename, cl_strerror(ret));
     } else if (logok) {
+        if (conn_reply(scandata->conn, filename, "", "OK") == -1) {
+            free(filename);
+            if((scandata->options & CL_SCAN_ALLMATCHES) && (virpp != &virname))
+                free((void *)virpp);
+            return CL_ETIMEOUT;
+        }
 	logg("~%s: OK\n", filename);
     }
 
