@@ -1,6 +1,7 @@
 /*
  *  Extract component parts of OLE2 files (e.g. MS Office Documents)
  *
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2007-2008 Sourcefire, Inc.
  *
  *  Authors: Trog
@@ -27,6 +28,5 @@
 #include "uniq.h"
 
 int cli_ole2_extract(const char *dirname, cli_ctx *ctx, struct uniq **);
-int cli_ole2_summary_json(cli_ctx *ctx, int fd, int mode);
 
 #endif

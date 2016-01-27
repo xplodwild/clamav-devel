@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2014 Cisco and/or its affiliates. All rights reserved.
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2007-2013 Sourcefire, Inc.
  *
  *  Authors: Tomasz Kojm
@@ -60,7 +60,7 @@ static struct dconf_module modules[] = {
     { "PE",     "MD5SECT",      PE_CONF_MD5SECT,        1 },
     { "PE",     "UPX",      PE_CONF_UPX,        1 },
     { "PE",     "FSG",      PE_CONF_FSG,        1 },
-    { "PE",     "SWIZZOR",      PE_CONF_SWIZZOR,        1 },
+    { "PE",     "SWIZZOR",      PE_CONF_SWIZZOR,        0 },
 
     { "PE",     "PETITE",       PE_CONF_PETITE,     1 },
     { "PE",     "PESPIN",       PE_CONF_PESPIN,     1 },
@@ -102,6 +102,7 @@ static struct dconf_module modules[] = {
     { "ARCHIVE",    "XAR",      ARCH_CONF_XAR,      1 },
     { "ARCHIVE",    "HFSPLUS",      ARCH_CONF_HFSPLUS,      1 },
     { "ARCHIVE",    "XZ",       ARCH_CONF_XZ,       1 },
+    { "ARCHIVE",    "PASSWD",   ARCH_CONF_PASSWD,   1 },
 
     { "DOCUMENT",   "HTML",     DOC_CONF_HTML,      1 },
     { "DOCUMENT",   "RTF",      DOC_CONF_RTF,       1 },
@@ -392,8 +393,8 @@ int cli_dconf_load(FILE *fs, struct cl_engine *engine, unsigned int options, str
             }
         }
 
-        if(!strncmp(buffer, "MACHO:", 4) && chkflevel(buffer, 2)) {
-            if(sscanf(buffer + 4, "0x%x", &val) == 1) {
+        if(!strncmp(buffer, "MACHO:", 6) && chkflevel(buffer, 2)) {
+            if(sscanf(buffer + 6, "0x%x", &val) == 1) {
                 engine->dconf->macho = val;
             } else {
                 ret = CL_EMALFDB;

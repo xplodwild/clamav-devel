@@ -1,4 +1,5 @@
 /*
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2007-2013 Sourcefire, Inc.
  *
  *  Authors: Tomasz Kojm
@@ -130,17 +131,25 @@ struct metachain {
     size_t nchains;
 };
 
+struct clamscan_cb_data {
+    struct metachain * chain;
+    char * filename;
+};
+
 static cl_error_t pre(int fd, const char *type, void *context)
 {
     struct metachain *c;
+    struct clamscan_cb_data *d;
 
     UNUSEDPARAM(fd);
     UNUSEDPARAM(type);
 
     if (!(context))
         return CL_CLEAN;
-
-    c = (struct metachain *)context;
+    d = (struct clamscan_cb_data *)context;
+    c = d->chain;
+    if (c == NULL)
+        return CL_CLEAN;
 
     c->level++;
 
@@ -173,11 +182,15 @@ static int print_chain(struct metachain *c, char *str, size_t len)
 
 static cl_error_t post(int fd, int result, const char *virname, void *context)
 {
-    struct metachain *c = context;
+    struct clamscan_cb_data *d = context;
+    struct metachain *c;
     char str[128];
 
     UNUSEDPARAM(fd);
     UNUSEDPARAM(result);
+
+    if (d != NULL)
+        c = d->chain;
 
     if (c && c->nchains) {
         print_chain(c, str, sizeof(str));
@@ -200,6 +213,7 @@ static cl_error_t meta(const char* container_type, unsigned long fsize_container
 {
     char prev[128];
     struct metachain *c;
+    struct clamscan_cb_data *d;
     const char *type;
     size_t n;
     char *chain;
@@ -211,7 +225,11 @@ static cl_error_t meta(const char* container_type, unsigned long fsize_container
     UNUSEDPARAM(is_encrypted);
     UNUSEDPARAM(filepos_container);
 
-    c = (struct metachain *)context;
+    if (!(context))
+        return CL_CLEAN;
+    d = (struct clamscan_cb_data *)context;
+
+    c = d->chain;
     type = (strncmp(container_type, "CL_TYPE_", 8) == 0 ? container_type + 8 : container_type);
     n = strlen(type) + strlen(filename) + 2;
 
@@ -256,15 +274,30 @@ static cl_error_t meta(const char* container_type, unsigned long fsize_container
     return CL_CLEAN;
 }
 
+static void clamscan_virus_found_cb(int fd, const char *virname, void *context)
+{
+    struct clamscan_cb_data *data = (struct clamscan_cb_data *)context;
+    char * filename;
+
+    if (data == NULL)
+        return;
+    if (data->filename != NULL)
+        filename = data->filename;
+    else
+        filename = "(filename not set)";
+    logg("~%s: %s FOUND\n", filename, virname);
+    return;
+}
+
 static void scanfile(const char *filename, struct cl_engine *engine, const struct optstruct *opts, unsigned int options)
 {
     int ret = 0, fd, included;
     unsigned i;
     const struct optstruct *opt;
     const char *virname;
-    const char **virpp = &virname;
     STATBUF sb;
     struct metachain chain;
+    struct clamscan_cb_data data;
 
     if((opt = optget(opts, "exclude"))->enabled) {
         while(opt) {
@@ -348,12 +381,9 @@ static void scanfile(const char *filename, struct cl_engine *engine, const struc
         return;
     }
 
-
-    if((ret = cl_scandesc_callback(fd, virpp, &info.blocks, engine, options, &chain)) == CL_VIRUS) {
-        if (options & CL_SCAN_ALLMATCHES) {
-            virpp = (const char **)*virpp; /* allmatch needs an extra dereference */
-            virname = virpp[0]; /* this is the first virus */
-        }
+    data.chain = &chain;
+    data.filename = filename;
+    if((ret = cl_scandesc_callback(fd, &virname, &info.blocks, engine, options, &data)) == CL_VIRUS) {
         if(optget(opts, "archive-verbose")->enabled) {
             if (chain.nchains > 1) {
                 char str[128];
@@ -364,15 +394,7 @@ static void scanfile(const char *filename, struct cl_engine *engine, const struc
                 logg("~%s!(%u): %s FOUND\n", filename, chain.lastvir-1, virname);
             }
         }
-
-        if (options & CL_SCAN_ALLMATCHES) {
-            int i = 0;
-            while (virpp[i])
-                logg("~%s: %s FOUND\n", filename, virpp[i++]);
-
-            free((void *)virpp);
-        }
-        else
+        if (!(options & CL_SCAN_ALLMATCHES))
             logg("~%s: %s FOUND\n", filename, virname);
 
         info.files++;
@@ -520,10 +542,10 @@ static int scanstdin(const struct cl_engine *engine, const struct optstruct *opt
     int ret;
     unsigned int fsize = 0;
     const char *virname, *tmpdir;
-    const char **virpp = &virname;
     char *file, buff[FILEBUFF];
     size_t bread;
     FILE *fs;
+    struct clamscan_cb_data data;
 
     if(optget(opts, "tempdir")->enabled) {
         tmpdir = optget(opts, "tempdir")->strarg;
@@ -565,20 +587,11 @@ static int scanstdin(const struct cl_engine *engine, const struct optstruct *opt
     info.files++;
     info.rblocks += fsize / CL_COUNT_PRECISION;
 
-    if((ret = cl_scanfile(file, &virname, &info.blocks, engine, options)) == CL_VIRUS) {
-        if (options & CL_SCAN_ALLMATCHES) {
-            int i = 0;
-
-            virpp = (const char **)*virpp; /* temp hack for scanall mode until api augmentation */
-            virname = virpp[0];
-
-            while (virpp[i])
-                logg("stdin: %s FOUND\n", virpp[i++]);
-
-            free((void *)virpp);
-        } else {
+    data.filename = "stdin";
+    data.chain = NULL;
+    if((ret = cl_scanfile_callback(file, &virname, &info.blocks, engine, options, &data)) == CL_VIRUS) {
+        if (!(options & CL_SCAN_ALLMATCHES))
             logg("stdin: %s FOUND\n", virname);
-        }
 
         info.ifiles++;
 
@@ -622,6 +635,17 @@ int scanmanager(const struct optstruct *opts)
     if(filelnk > 2) {
         logg("!--follow-file-symlinks: Invalid argument\n");
         return 2;
+    }
+
+    if(optget(opts, "yara-rules")->enabled) {
+	char *p = optget(opts, "yara-rules")->strarg;
+	if(strcmp(p, "yes")) {
+	    if(!strcmp(p, "only"))
+		dboptions |= CL_DB_YARA_ONLY;
+	    else if (!strcmp(p, "no"))
+		dboptions |= CL_DB_YARA_EXCLUDE;
+	}
+
     }
 
     if(optget(opts, "phishing-sigs")->enabled)
@@ -962,6 +986,15 @@ int scanmanager(const struct optstruct *opts)
         }
     }
 
+    if((opt = optget(opts, "max-rechwp3"))->active) {
+        if((ret = cl_engine_set_num(engine, CL_ENGINE_MAX_RECHWP3, opt->numarg))) {
+            logg("!cli_engine_set_num(CL_ENGINE_MAX_RECHWP3) failed: %s\n", cl_strerror(ret));
+
+            cl_engine_free(engine);
+            return 2;
+        }
+    }
+
     if ((opt = optget(opts, "timelimit"))->active) {
         if ((ret = cl_engine_set_num(engine, CL_ENGINE_TIME_LIMIT, opt->numarg))) {
             logg("!cli_engine_set_num(CL_ENGINE_TIME_LIMIT) failed: %s\n", cl_strerror(ret));
@@ -996,8 +1029,10 @@ int scanmanager(const struct optstruct *opts)
     }
 
     /* set scan options */
-    if(optget(opts, "allmatch")->enabled)
+    if(optget(opts, "allmatch")->enabled) {
         options |= CL_SCAN_ALLMATCHES;
+        cl_engine_set_clcb_virus_found(engine, clamscan_virus_found_cb);
+    }
 
     if(optget(opts,"phishing-ssl")->enabled)
         options |= CL_SCAN_PHISHING_BLOCKSSL;

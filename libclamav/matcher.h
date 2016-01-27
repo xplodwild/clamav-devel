@@ -1,4 +1,5 @@
 /*
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2007-2013 Sourcefire, Inc.
  *
  *  Authors: Tomasz Kojm
@@ -77,6 +78,8 @@ struct cli_lsig_tdb {
 #endif
 };
 
+#define CLI_LSIG_FLAG_PRIVATE 0x01
+
 struct cli_bc;
 struct cli_ac_lsig {
 #define CLI_LSIG_NORMAL 0
@@ -85,6 +88,7 @@ struct cli_ac_lsig {
     uint32_t id;
     unsigned bc_idx;
     uint8_t type;
+    uint8_t flag;
     union {
         char *logic;
         uint8_t *code_start;
@@ -160,7 +164,7 @@ struct cli_mtarget {
     uint8_t target_count; /* must be synced with non-zero values in the target array */
 };
 
-#define CLI_MTARGETS 14
+#define CLI_MTARGETS 15
 static const struct cli_mtarget cli_mtargets[CLI_MTARGETS] =  {
     { {0, 0},                                   "GENERIC",      0,  0, 1, 1 },
     { {CL_TYPE_MSEXE, 0},                       "PE",           1,  0, 1, 1 },
@@ -175,7 +179,8 @@ static const struct cli_mtarget cli_mtargets[CLI_MTARGETS] =  {
     { {CL_TYPE_PDF, 0},                         "PDF",         10,  1, 0, 1 },
     { {CL_TYPE_SWF, 0},                         "FLASH",       11,  1, 0, 1 },
     { {CL_TYPE_JAVA, 0},                        "JAVA",        12,  1, 0, 1 },
-    { {CL_TYPE_INTERNAL, 0},                    "INTERNAL",    13,  1, 0, 1 }
+    { {CL_TYPE_INTERNAL, 0},                    "INTERNAL",    13,  1, 0, 1 },
+    { {CL_TYPE_OTHER, 0},                       "OTHER",       14,  1, 0, 1 }
 };
 
 #define CLI_OFF_ANY         0xffffffff

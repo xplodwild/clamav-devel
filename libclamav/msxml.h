@@ -1,6 +1,7 @@
 /*
  *  Extract component parts of MS XML files (e.g. MS Office 2003 XML Documents)
  *
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2007-2008 Sourcefire, Inc.
  *
  *  Authors: Kevin Lin
@@ -29,6 +30,25 @@
 
 #include "others.h"
 
+enum msxml_state {
+    MSXML_STATE_NORMAL = 0,
+    MSXML_STATE_ENTITY_START_1,
+    MSXML_STATE_ENTITY_START_2,
+    MSXML_STATE_ENTITY_HEX,
+    MSXML_STATE_ENTITY_DEC,
+    MSXML_STATE_ENTITY_CLOSE,
+    MSXML_STATE_ENTITY_NONE
+};
+
+struct msxml_cbdata {
+    enum msxml_state state;
+    fmap_t *map;
+    const unsigned char *window;
+    off_t winpos, mappos;
+    size_t winsize;
+};
+
+int msxml_read_cb(void *ctx, char *buffer, int len);
 int cli_scanmsxml(cli_ctx *ctx);
 
 #endif /* __MSXML_H */

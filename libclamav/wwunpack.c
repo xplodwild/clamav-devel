@@ -1,4 +1,5 @@
 /*
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2007-2008 Sourcefire, Inc.
  *
  *  Authors: Alberto Wu
@@ -220,6 +221,9 @@ int wwunpack(uint8_t *exe, uint32_t exesz, uint8_t *wwsect, struct cli_exe_secti
   }
 
   if(!error) {
+    if (pe+6 > exesz || pe+7 > exesz || pe+0x28 > exesz ||
+		pe+0x50 > exesz || pe+0x14 > exesz) 
+	return CL_EFORMAT;
     exe[pe+6]=(uint8_t)scount;
     exe[pe+7]=(uint8_t)(scount>>8);
     cli_writeint32(&exe[pe+0x28], cli_readint32(wwsect+0x295)+sects[scount].rva+0x299);

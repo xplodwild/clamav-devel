@@ -1,4 +1,5 @@
 /*
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2008 Sourcefire, Inc.
  *
  *  Authors: Tomasz Kojm
@@ -43,6 +44,7 @@
 #define CLI_DEFAULT_MAXSCRIPTNORMALIZE  5242880
 #define CLI_DEFAULT_MAXZIPTYPERCG       1048576
 #define CLI_DEFAULT_MAXICONSPE          100
+#define CLI_DEFAULT_MAXRECHWP3          16
 
 #define CLI_DEFAULT_MAXPARTITIONS       50
 

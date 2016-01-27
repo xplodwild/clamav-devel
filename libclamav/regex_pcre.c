@@ -1,8 +1,8 @@
 /*
  *  Support for PCRE regex variant
  *
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2007-2013 Sourcefire, Inc.
- *  Copyright (C) 2014 Cisco Systems, Inc.
  *  All Rights Reserved.
  *
  *  Authors: Kevin Lin
@@ -34,8 +34,8 @@
 #include "others.h"
 #include "regex_pcre.h"
 
-/* TODO: cli_pcre_init: redefine pcre_malloc and pcre_free, setup callback function? */
-int cli_pcre_init()
+/* TODO: cli_pcre_init_internal: redefine pcre_malloc and pcre_free, setup callback function? */
+int cli_pcre_init_internal()
 {
     pcre_malloc = cli_malloc;
     pcre_free = free;

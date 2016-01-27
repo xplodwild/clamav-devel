@@ -1,6 +1,7 @@
 /*
  * Extract component parts of OLE2 files (e.g. MS Office Documents)
  * 
+ * Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  * Copyright (C) 2007-2013 Sourcefire, Inc.
  * 
  * Authors: Trog
@@ -40,6 +41,7 @@
 #include "clamav.h"
 #include "cltypes.h"
 #include "others.h"
+#include "hwp.h"
 #include "ole2_extract.h"
 #include "scanners.h"
 #include "fmap.h"
@@ -107,6 +109,7 @@ typedef struct ole2_header_tag {
     struct uniq    *U;
     fmap_t         *map;
     int             has_vba;
+    hwp5_header_t  *is_hwp;
 }               ole2_header_t;
 
 typedef struct property_tag {
@@ -399,8 +402,12 @@ ole2_read_block(ole2_header_t * hdr, void *buff, unsigned int size, int32_t bloc
     offset = (blockno << hdr->log2_big_block_size) + MAX(512, 1 << hdr->log2_big_block_size);   /* 512 is header size */
 
     offend = offset + size;
-    if ((offend <= 0) || (offend > hdr->m_length)) {
+    if ((offend <= 0) || (offset < 0) || (offset >= hdr->m_length)) {
         return FALSE;
+    } else if (offend > hdr->m_length) {
+        /* bb#11369 - ole2 files may not be a block multiple in size */
+        memset(buff, 0, size);
+        size = hdr->m_length - offset;
     }
     if (!(pblock = fmap_need_off_once(hdr->map, offset, size))) {
         return FALSE;
@@ -910,6 +917,9 @@ static int
 handler_enum(ole2_header_t * hdr, property_t * prop, const char *dir, cli_ctx * ctx)
 {
     char           *name = NULL;
+    unsigned char  *hwp_check;
+    int32_t        offset;
+    int            ret = CL_SUCCESS;
 #if HAVE_JSON
     json_object *arrobj, *strmobj;
 
@@ -951,9 +961,78 @@ handler_enum(ole2_header_t * hdr, property_t * prop, const char *dir, cli_ctx * 
         }
     }
 
+    /*
+     * if we can find a root entry fileheader, it may be a HWP file
+     * identify the HWP signature "HWP Document File" at offset 0 stream
+     */
+    if (!hdr->is_hwp) {
+        if (!name)
+            name = get_property_name2(prop->name, prop->name_size);
+        if (name) {
+            if (!strcmp(name, "fileheader")) {
+                hwp_check = (unsigned char *)cli_calloc(1, 1 << hdr->log2_big_block_size);
+                if (!hwp_check) {
+                    free(name);
+                    return CL_EMEM;
+                }
+
+                /* reading safety checks; do-while used for breaks */
+                do {
+                    if ((prop->start_block < 0) && (prop->size <= 0))
+                        break;
+
+                    if (prop->start_block > (int32_t) hdr->max_block_no)
+                        break;
+
+                    /* read the header block (~256 bytes) */
+                    offset = 0;
+                    if (prop->size < (int64_t) hdr->sbat_cutoff) {
+                        if (!ole2_get_sbat_data_block(hdr, hwp_check, prop->start_block)) {
+                            ret = CL_EREAD;
+                            break;
+                        }
+                        offset = (1 << hdr->log2_small_block_size) *
+                            (prop->start_block % (1 << (hdr->log2_big_block_size - hdr->log2_small_block_size)));
+
+                        /* reading safety */
+                        if (offset + 40 >= 1 << hdr->log2_big_block_size)
+                            break;
+                    } else {
+                        if (!ole2_read_block(hdr, hwp_check, 1 << hdr->log2_big_block_size, prop->start_block)) {
+                            ret = CL_EREAD;
+                            break;
+                        }
+                    }
+
+                    /* compare against HWP signature; we could add the 15 padding NULLs too */
+                    if (!memcmp(hwp_check+offset, "HWP Document File", 17)) {
+                        hwp5_header_t *hwp_new;
+#if HAVE_JSON
+                        cli_jsonstr(ctx->wrkproperty, "FileType", "CL_TYPE_HWP5");
+#endif
+                        hwp_new = cli_calloc(1, sizeof(hwp5_header_t));
+                        if (!(hwp_new)) {
+                            ret = CL_EMEM;
+                            break;
+                        }
+
+                        memcpy(hwp_new, hwp_check+offset, sizeof(hwp5_header_t));
+
+                        hwp_new->version = ole2_endian_convert_32(hwp_new->version);
+                        hwp_new->flags = ole2_endian_convert_32(hwp_new->flags);
+
+                        hdr->is_hwp = hwp_new;
+                    }
+                } while(0);
+
+                free(hwp_check);
+            }
+        }
+    }
+
     if (name)
         free(name);
-    return CL_SUCCESS;
+    return ret;
 }
 
 static int
@@ -1047,6 +1126,10 @@ scan_mso_stream(int fd, cli_ctx *ctx)
         ret = CL_EREAD;
         goto mso_end;
     }
+
+    /* RFC1952 says numbers are stored with least significant byte first */
+    prefix = le32_to_host (prefix);
+
     off_in += sizeof(uint32_t);
     cli_dbgmsg("scan_mso_stream: stream prefix = %08x(%d)\n", prefix, prefix);
 
@@ -1092,7 +1175,7 @@ scan_mso_stream(int fd, cli_ctx *ctx)
 
         cli_infomsg(ctx, "scan_mso_stream: Error decompressing MSO file. Scanning what was decompressed.\n");
     }
-    cli_dbgmsg("scan_mso_stream: Decompressed to %s, size %d\n", tmpname, outsize);
+    cli_dbgmsg("scan_mso_stream: Decompressed %llu bytes to %s\n", (long long unsigned)outsize, tmpname);
 
     if (outsize != prefix) {
         cli_warnmsg("scan_mso_stream: declared prefix != inflated stream size, %llu != %llu\n",
@@ -1111,7 +1194,7 @@ scan_mso_stream(int fd, cli_ctx *ctx)
     if (zret != Z_OK)
         ret = CL_EUNPACK;
     close(ofd);
-    if(ctx && !ctx->engine->keeptmp)
+    if (!ctx->engine->keeptmp)
         if (cli_unlink(tmpname))
             ret = CL_EUNLINK;
     free(tmpname);
@@ -1122,7 +1205,7 @@ scan_mso_stream(int fd, cli_ctx *ctx)
 static int
 handler_otf(ole2_header_t * hdr, property_t * prop, const char *dir, cli_ctx * ctx)
 {
-    char           *tempfile;
+    char           *tempfile, *name = NULL;
     unsigned char  *buff;
     int32_t         current_block, len, offset;
     int             ofd, is_mso, ret;
@@ -1224,6 +1307,8 @@ handler_otf(ole2_header_t * hdr, property_t * prop, const char *dir, cli_ctx * c
         }
     }
 
+    /* defragmenting of ole2 stream complete */
+
     is_mso = likely_mso_stream(ofd);
     if (lseek(ofd, 0, SEEK_SET) == -1) {
         close(ofd);
@@ -1239,7 +1324,7 @@ handler_otf(ole2_header_t * hdr, property_t * prop, const char *dir, cli_ctx * c
 #if HAVE_JSON
     /* JSON Output Summary Information */
     if (ctx->options & CL_SCAN_FILE_PROPERTIES && ctx->properties != NULL) {
-        char *name = get_property_name2(prop->name, prop->name_size);
+        name = get_property_name2(prop->name, prop->name_size);
         if (name) {
             if (!strncmp(name, "_5_summaryinformation", 21)) {
                 cli_dbgmsg("OLE2: detected a '_5_summaryinformation' stream\n");
@@ -1272,22 +1357,24 @@ handler_otf(ole2_header_t * hdr, property_t * prop, const char *dir, cli_ctx * c
                 }
             }
         }
-        free(name);
     }
 #endif
 
-    if (is_mso < 0) {
+    if (hdr->is_hwp) {
+        if (!name)
+            name = get_property_name2(prop->name, prop->name_size);
+        ret = cli_scanhwp5_stream(ctx, hdr->is_hwp, name, ofd);
+    } else if (is_mso < 0) {
         ret = CL_ESEEK;
     } else if (is_mso) {
         /* MSO Stream Scan */
         ret = scan_mso_stream(ofd, ctx);
-        /* CONSIDER: running cli_magic_scandesc in the chance of MSO fp? */
-        //if (ret != CL_SUCCESS || ret != CL_VIRUS)
-        //ret = cli_magic_scandesc(ofd, ctx);
     } else {
         /* Normal File Scan */
         ret = cli_magic_scandesc(ofd, ctx);
     }
+    if (name)
+        free(name);
     close(ofd);
     free(buff);
     cli_bitset_free(blk_bitset);
@@ -1379,6 +1466,7 @@ cli_ole2_extract(const char *dirname, cli_ctx * ctx, struct uniq **vba)
     if (!ctx)
         return CL_ENULLARG;
 
+    hdr.is_hwp = NULL;
     hdr.bitset = NULL;
     if (ctx->engine->maxscansize) {
         if (ctx->engine->maxscansize > ctx->scansize)
@@ -1393,7 +1481,7 @@ cli_ole2_extract(const char *dirname, cli_ctx * ctx, struct uniq **vba)
     /* size of header - size of other values in struct */
     hdr_size = sizeof(struct ole2_header_tag) - sizeof(int32_t) - sizeof(uint32_t) -
         sizeof(off_t) - sizeof(bitset_t *) -
-        sizeof(struct uniq *) - sizeof(int) - sizeof(fmap_t *);
+        sizeof(struct uniq *) - sizeof(fmap_t *) - sizeof(int) - sizeof(hwp5_header_t *);
 
     if ((size_t)((*ctx->fmap)->len) < (size_t)(hdr_size)) {
         return CL_CLEAN;
@@ -1447,7 +1535,7 @@ cli_ole2_extract(const char *dirname, cli_ctx * ctx, struct uniq **vba)
 
     if (hdr.map->len > INT32_MAX) {
         cli_dbgmsg("OLE2 extract: Overflow detected\n");
-	ret = CL_EFORMAT;
+        ret = CL_EFORMAT;
         goto abort;
     }
     /* 8 SBAT blocks per file block */
@@ -1463,6 +1551,17 @@ cli_ole2_extract(const char *dirname, cli_ctx * ctx, struct uniq **vba)
     hdr.bitset = NULL;
     if (!file_count || !(hdr.bitset = cli_bitset_init()))
         goto abort;
+
+    if (hdr.is_hwp) {
+        cli_dbgmsg("OLE2: identified HWP document\n");
+        cli_dbgmsg("OLE2: HWP signature: %.17s\n", hdr.is_hwp->signature);
+        cli_dbgmsg("OLE2: HWP version: 0x%08x\n", hdr.is_hwp->version);
+        cli_dbgmsg("OLE2: HWP flags:   0x%08x\n", hdr.is_hwp->flags);
+
+        ret = cli_hwp5header(ctx, hdr.is_hwp);
+        if (ret != CL_SUCCESS)
+            goto abort;
+    }
 
     /* If there's no VBA we scan OTF */
     if (hdr.has_vba) {
@@ -1487,6 +1586,9 @@ cli_ole2_extract(const char *dirname, cli_ctx * ctx, struct uniq **vba)
 abort:
     if (hdr.bitset)
         cli_bitset_free(hdr.bitset);
+
+    if (hdr.is_hwp)
+        free(hdr.is_hwp);
 
     return ret == CL_BREAK ? CL_CLEAN : ret;
 }

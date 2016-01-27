@@ -1,4 +1,5 @@
 /*
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2008 Sourcefire, Inc.
  *
  *  Authors: Tomasz Kojm
@@ -31,7 +32,6 @@
 #include "../libclamav/matcher-ac.h"
 #include "../libclamav/matcher-bm.h"
 #include "../libclamav/matcher-pcre.h"
-#include "../libclamav/regex_pcre.h"
 #include "../libclamav/others.h"
 #include "../libclamav/default.h"
 #include "checks.h"
@@ -52,6 +52,27 @@ static const struct ac_testdata_s {
     /* testcase for filter bug: it was checking only first 32 chars, and last
      * maxpatlen */
     { "\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1dddddddddddddddddddd5\1\1\1\1\1\1\1\1\1\1\1\1\1","6464646464646464646464646464646464646464(35|36)","Test_8: filter bug"},
+
+    /* altbyte */
+    { "aabaa", "6161(62|63|64)6161", "Ac_Altstr_Test_1" }, /* control */
+    { "aacaa", "6161(62|63|64)6161", "Ac_Altstr_Test_1" }, /* control */
+    { "aadaa", "6161(62|63|64)6161", "Ac_Altstr_Test_1" }, /* control */
+
+    /* alt-fstr */
+    { "aabbbaa", "6161(626262|636363|646464)6161", "Ac_Altstr_Test_2" }, /* control */
+    { "aacccaa", "6161(626262|636363|646464)6161", "Ac_Altstr_Test_2" }, /* control */
+    { "aadddaa", "6161(626262|636363|646464)6161", "Ac_Altstr_Test_2" }, /* control */
+
+    /* alt-vstr */
+    { "aabbaa", "6161(6262|63636363|6464646464)6161", "Ac_Altstr_Test_3" }, /* control */
+    { "aaccccaa", "6161(6262|63636363|6464646464)6161", "Ac_Altstr_Test_3" }, /* control */
+    { "aadddddaa", "6161(6262|63636363|6464646464)6161", "Ac_Altstr_Test_3" }, /* control */
+
+    /* alt-embed */
+    { "aajjaa", "6161(6a6a|66(6767|6868)66|6969)6161", "Ac_Altstr_Test_4" }, /* control */
+    { "aafggfaa", "6161(6a6a|66(6767|6868)66|6969)6161", "Ac_Altstr_Test_4" }, /* control */
+    { "aafhhfaa", "6161(6a6a|66(6767|6868)66|6969)6161", "Ac_Altstr_Test_4" }, /* control */
+    { "aaiiaa", "6161(6a6a|66(6767|6868)66|6969)6161", "Ac_Altstr_Test_4" }, /* control */
 
     { NULL, NULL, NULL }
 };
@@ -238,11 +259,8 @@ START_TEST (test_ac_scanbuff_allscan) {
 	ret = cli_scanbuff((const unsigned char*)ac_testdata[i].data, strlen(ac_testdata[i].data), 0, &ctx, 0, NULL);
 	fail_unless_fmt(ret == CL_VIRUS, "cli_scanbuff() failed for %s", ac_testdata[i].virname);
 	fail_unless_fmt(!strncmp(virname, ac_testdata[i].virname, strlen(ac_testdata[i].virname)), "Dataset %u matched with %s", i, virname);
-	if (ctx.num_viruses) {
-	    free((void *)ctx.virname);
+	if (ctx.num_viruses)
 	    ctx.num_viruses = 0;
-	    ctx.size_viruses = 0;
-	}
      }
 
     cli_ac_freedata(&mdata);
@@ -326,11 +344,8 @@ START_TEST (test_ac_scanbuff_allscan_ex) {
 
 	ret = cli_scanbuff((const unsigned char*)ac_sigopts_testdata[i].data, ac_sigopts_testdata[i].dlength, 0, &ctx, 0, NULL);
 	fail_unless_fmt(ret == ac_sigopts_testdata[i].expected_result, "[ac_ex] cli_ac_scanbuff() failed for %s (%d != %d)", ac_sigopts_testdata[i].virname, ret, ac_sigopts_testdata[i].expected_result);
-	if (ctx.num_viruses) {
-	    free((void *)ctx.virname);
+	if (ctx.num_viruses)
 	    ctx.num_viruses = 0;
-	    ctx.size_viruses = 0;
-	}
     }
 
     cli_ac_freedata(&mdata);
@@ -495,11 +510,8 @@ START_TEST (test_pcre_scanbuff_allscan) {
 	ret = cli_scanbuff((const unsigned char*)pcre_testdata[i].data, strlen(pcre_testdata[i].data), 0, &ctx, 0, NULL);
 	fail_unless_fmt(ret == pcre_testdata[i].expected_result, "[pcre] cli_scanbuff() failed for %s", pcre_testdata[i].virname);
 	/* num_virus field add to test case struct */
-	if (ctx.num_viruses) {
-	    free((void *)ctx.virname);
+	if (ctx.num_viruses)
 	    ctx.num_viruses = 0;
-	    ctx.size_viruses = 0;
-	}
     }
 
     cli_ac_freedata(&mdata);

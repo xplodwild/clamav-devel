@@ -181,11 +181,13 @@
     <ClCompile Include="..\libclamav\crypto.c" />
     <ClCompile Include="..\libclamav\fpu.c" />
     <ClCompile Include="..\libclamav\hostid.c" />
+    <ClCompile Include="..\libclamav\hwp.c" />
     <ClCompile Include="..\libclamav\pdfng.c" />
     <ClCompile Include="..\libclamav\stats_json.c" />
     <ClCompile Include="..\libclamav\openioc.c" />
     <ClCompile Include="..\libclamav\sf_base64decode.c" />
     <ClCompile Include="..\libclamav\stats.c" />
+    <ClCompile Include="..\libclamav\tiff.c" />
     <ClCompile Include="..\libclamav\tomsfastmath\mul\fp_mul_comba_small_set.c" />
     <ClCompile Include="..\libclamav\tomsfastmath\mul\fp_mul_comba_9.c" />
     <ClCompile Include="..\libclamav\tomsfastmath\mul\fp_mul_comba_64.c" />
@@ -466,6 +468,7 @@
     <ClCompile Include="3rdparty\libxml2\xmlreader.c" />
     <ClCompile Include="3rdparty\libxml2\xmlsave.c" />
     <ClCompile Include="3rdparty\libxml2\xmlstring.c" />
+    <ClCompile Include="3rdparty\pcre\pcre_byte_order.c" />
     <ClCompile Include="3rdparty\pcre\pcre_chartables.c" />
     <ClCompile Include="3rdparty\pcre\pcre_compile.c" />
     <ClCompile Include="3rdparty\pcre\pcre_config.c" />
@@ -474,15 +477,15 @@
     <ClCompile Include="3rdparty\pcre\pcre_fullinfo.c" />
     <ClCompile Include="3rdparty\pcre\pcre_get.c" />
     <ClCompile Include="3rdparty\pcre\pcre_globals.c" />
-    <ClCompile Include="3rdparty\pcre\pcre_info.c" />
+    <ClCompile Include="3rdparty\pcre\pcre_jit_compile.c" />
     <ClCompile Include="3rdparty\pcre\pcre_maketables.c" />
     <ClCompile Include="3rdparty\pcre\pcre_newline.c" />
     <ClCompile Include="3rdparty\pcre\pcre_ord2utf8.c" />
     <ClCompile Include="3rdparty\pcre\pcre_refcount.c" />
+    <ClCompile Include="3rdparty\pcre\pcre_string_utils.c" />
     <ClCompile Include="3rdparty\pcre\pcre_study.c" />
     <ClCompile Include="3rdparty\pcre\pcre_tables.c" />
-    <ClCompile Include="3rdparty\pcre\pcre_try_flipped.c" />
-    <ClCompile Include="3rdparty\pcre\pcre_ucp_searchfuncs.c" />
+    <ClCompile Include="3rdparty\pcre\pcre_ucd.c" />
     <ClCompile Include="3rdparty\pcre\pcre_valid_utf8.c" />
     <ClCompile Include="3rdparty\pcre\pcre_version.c" />
     <ClCompile Include="3rdparty\pcre\pcre_xclass.c" />
@@ -539,6 +542,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\libclamav\hostid.h" />
+    <ClInclude Include="..\libclamav\hwp.h" />
     <ClInclude Include="..\libclamav\stats.h" />
     <ClInclude Include="..\libclamav\www.h" />
     <ClInclude Include="..\libclamav\xdp.h" />

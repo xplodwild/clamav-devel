@@ -1,6 +1,6 @@
 /*
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2007-2014 Sourcefire, Inc.
- *  Copyright (C) 2014 Cisco and/or its affiliates. All rights reserved.
  *
  *  Authors: Nigel Horne, Török Edvin
  *
@@ -701,6 +701,10 @@ static void aes_decrypt(const unsigned char *in, off_t *length, unsigned char *q
 
     cli_dbgmsg("aes_decrypt: Calling rijndaelSetupDecrypt\n");
     nrounds = rijndaelSetupDecrypt(rk, (const unsigned char *)key, key_n*8);
+    if (!nrounds) {
+	cli_dbgmsg("cli_pdf: aes_decrypt: nrounds = 0\n");
+	return;
+    }
     cli_dbgmsg("aes_decrypt: Beginning rijndaelDecrypt\n");
 
     while (len >= 16) {

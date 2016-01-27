@@ -1,6 +1,7 @@
 /*
  *  Javascript normalizer.
  *
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2008 Sourcefire, Inc.
  *
  *  Authors: Török Edvin
@@ -717,6 +718,8 @@ static void handle_df(const yystype *tokens, size_t start, struct decode_result 
 	if(!str)
 		return;
 	len = strlen(str);
+	if(!len)
+		return;
 	clast = str[len-1] - '0';
 
 	str[len-1] = '\0';

@@ -1,6 +1,6 @@
 /*
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2011-2013 Sourcefire, Inc.
- *  Copyright (C) 2014 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *
  *  The code is based on Flasm, command line assembler & disassembler of Flash
  *  ActionScript bytecode Copyright (c) 2001 Opaque Industries, (c) 2002-2007
@@ -185,8 +185,17 @@ static int scanzws(cli_ctx *ctx, struct swf_file_hdr *hdr)
         free(tmpname);
         return CL_EUNPACK;
     }
-    if (!ret)
-        return CL_EFORMAT; /* likely truncated */
+    /* nothing written, likely truncated */
+    if (!ret) {
+        cli_errmsg("scanzws: possibly truncated file\n");
+        close(fd);
+        if (cli_unlink(tmpname)) {
+            free(tmpname);
+            return CL_EUNLINK;
+        }
+        free(tmpname);
+        return CL_EFORMAT;
+    }
     offset += ret;
 
     memset(&lz, 0, sizeof(lz));
@@ -266,7 +275,7 @@ static int scanzws(cli_ctx *ctx, struct swf_file_hdr *hdr)
         }
         cli_infomsg(ctx, "scanzws: Error decompressing SWF file. Scanning what was decompressed.\n");
     }
-    cli_dbgmsg("SWF: Decompressed[LZMA] to %s, size %d\n", tmpname, outsize);
+    cli_dbgmsg("SWF: Decompressed[LZMA] to %s, size %llu\n", tmpname, (long long unsigned)outsize);
 
     /* check if declared output size matches actual output size */
     if (hdr->filesize != outsize) {
@@ -449,6 +458,14 @@ int cli_scanswf(cli_ctx *ctx)
         return CL_CLEAN;
     }
     offset += sizeof(file_hdr);
+    /*
+    **  SWF stores the integer bytes with the least significate byte first
+    */
+    
+    file_hdr.filesize = le32_to_host (file_hdr.filesize); 
+
+    cli_dbgmsg("SWF: Version: %u\n", file_hdr.version);
+    cli_dbgmsg("SWF: File size: %u\n", file_hdr.filesize);
 
     if(!strncmp(file_hdr.signature, "CWS", 3)) {
         cli_dbgmsg("SWF: zlib compressed file\n");
@@ -462,9 +479,6 @@ int cli_scanswf(cli_ctx *ctx)
         cli_dbgmsg("SWF: Not a SWF file\n");
         return CL_CLEAN;
     }
-
-    cli_dbgmsg("SWF: Version: %u\n", file_hdr.version);
-    cli_dbgmsg("SWF: File size: %u\n", EC32(file_hdr.filesize));
 
     INITBITS;
 

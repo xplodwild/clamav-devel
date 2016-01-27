@@ -1,4 +1,5 @@
 /*
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2008-2013 Sourcefire, Inc.
  *
  *  Author: Tomasz Kojm <tkojm@clamav.net>
@@ -110,6 +111,7 @@ const struct clam_option __clam_options[] = {
     { NULL, "mdb", 0, CLOPT_TYPE_BOOL, MATCH_BOOL, 0, NULL, 0, OPT_SIGTOOL, "", "" },
     { NULL, "print-certs", 0, CLOPT_TYPE_STRING, NULL, -1, NULL, 0, OPT_SIGTOOL, "", "" },
     { NULL, "html-normalise", 0, CLOPT_TYPE_STRING, NULL, -1, NULL, 0, OPT_SIGTOOL, "", "" },
+    { NULL, "ascii-normalise", 0, CLOPT_TYPE_STRING, NULL, -1, NULL, 0, OPT_SIGTOOL, "", "" },
     { NULL, "utf16-decode", 0, CLOPT_TYPE_STRING, NULL, -1, NULL, 0, OPT_SIGTOOL, "", "" },
     { NULL, "build", 'b', CLOPT_TYPE_STRING, NULL, -1, NULL, 0, OPT_SIGTOOL, "", "" },
     { NULL, "max-bad-sigs", 0, CLOPT_TYPE_NUMBER, MATCH_NUMBER, 3000, NULL, 0, OPT_SIGTOOL, "Maximum number of mismatched signatures when building a CVD. Zero disables this limit.", "3000" },
@@ -216,6 +218,8 @@ const struct clam_option __clam_options[] = {
     { "DatabaseDirectory", "datadir", 0, CLOPT_TYPE_STRING, NULL, -1, DATADIR, 0, OPT_CLAMD | OPT_FRESHCLAM | OPT_SIGTOOL, "This option allows you to change the default database directory.\nIf you enable it, please make sure it points to the same directory in\nboth clamd and freshclam.", "/var/lib/clamav" },
 
     { "OfficialDatabaseOnly", "official-db-only", 0, CLOPT_TYPE_BOOL, MATCH_BOOL, 0, NULL, 0, OPT_CLAMD | OPT_CLAMSCAN, "Only load the official signatures published by the ClamAV project.", "no" },
+
+    { "YaraRules", "yara-rules", 0, CLOPT_TYPE_STRING, NULL, 0, NULL, 0, OPT_CLAMSCAN, "By default, yara rules will be loaded. This option allows you to exclude yara rules when scanning and also to scan only using yara rules. Valid options are yes|no|only", "yes"},
 
     { "LocalSocket", NULL, 0, CLOPT_TYPE_STRING, NULL, -1, NULL, 0, OPT_CLAMD, "Path to a local socket file the daemon will listen on.", "/tmp/clamd.socket" },
 
@@ -378,24 +382,34 @@ const struct clam_option __clam_options[] = {
 
     { "MaxIconsPE", "max-iconspe", 0, CLOPT_TYPE_NUMBER, MATCH_NUMBER, CLI_DEFAULT_MAXICONSPE, NULL, 0, OPT_CLAMD | OPT_CLAMSCAN, "This option sets the maximum number of icons within a PE to be scanned.\nPE files with more icons than this value will have up to the value number icons scanned.\nNegative values are not allowed.\nWARNING: setting this limit too high may result in severe damage or impact performance.", "100" },
 
+    { "MaxRecHWP3", "max-rechwp3", 0, CLOPT_TYPE_NUMBER, MATCH_NUMBER, CLI_DEFAULT_MAXRECHWP3, NULL, 0, OPT_CLAMD | OPT_CLAMSCAN, "This option sets the maximum recursive calls to HWP3 parsing function.\nHWP3 files using more than this limit will be terminated and alert the user.\nScans will be unable to scan any HWP3 attachments if the recursive limit is reached.\nNegative values are not allowed.\nWARNING: setting this limit too high may result in severe damage or impact performance.", "16" },
+
     { "TimeLimit", "timelimit", 0, CLOPT_TYPE_NUMBER, MATCH_NUMBER, 0, NULL, 0, OPT_CLAMSCAN, "This clamscan option is currently for testing only. It sets the engine parameter CL_ENGINE_TIME_LIMIT. The value is in milliseconds.", "0" },
 
-    { "PCREMatchLimit", "pcre-match-limit", 0, CLOPT_TYPE_NUMBER, MATCH_NUMBER, CLI_DEFAULT_PCRE_MATCH_LIMIT, NULL, 0, OPT_CLAMD | OPT_CLAMSCAN, "This option sets the maximum calls to the PCRE match function during an instance of regex matching.\nInstances using more than this limit will be terminated and alert the user but the scan will continue.\nFor more information on match_limit, see the PCRE documentation.\nNegative values are not allowed.\nWARNING: setting this limit too high may severely impact performance.", "10000" },
+    { "PCREMatchLimit", "pcre-match-limit", 0, CLOPT_TYPE_SIZE, MATCH_SIZE, CLI_DEFAULT_PCRE_MATCH_LIMIT, NULL, 0, OPT_CLAMD | OPT_CLAMSCAN, "This option sets the maximum calls to the PCRE match function during an instance of regex matching.\nInstances using more than this limit will be terminated and alert the user but the scan will continue.\nFor more information on match_limit, see the PCRE documentation.\nNegative values are not allowed.\nWARNING: setting this limit too high may severely impact performance.", "10000" },
 
     { "PCRERecMatchLimit", "pcre-recmatch-limit", 0, CLOPT_TYPE_NUMBER, MATCH_NUMBER, CLI_DEFAULT_PCRE_RECMATCH_LIMIT, NULL, 0, OPT_CLAMD | OPT_CLAMSCAN, "This option sets the maximum recursive calls to the PCRE match function during an instance of regex matching.\nInstances using more than this limit will be terminated and alert the user but the scan will continue.\nFor more information on match_limit_recursion, see the PCRE documentation.\nNegative values are not allowed and values > PCREMatchLimit are superfluous.\nWARNING: setting this limit too high may severely impact performance.", "5000" },
 
-    { "PCREMaxFileSize", "pcre-max-filesize", 0, CLOPT_TYPE_NUMBER, MATCH_NUMBER, CLI_DEFAULT_PCRE_MAX_FILESIZE, NULL, 0, OPT_CLAMD | OPT_CLAMSCAN, "This option sets the maximum filesize for which PCRE subsigs will be executed.\nFiles exceeding this limit will not have PCRE subsigs executed unless a subsig is encompassed to a smaller buffer.\nNegative values are not allowed.\nSetting this value to zero disables the limit.\nWARNING: setting this limit too high or disabling it may severely impact performance.", "25M" },
+    { "PCREMaxFileSize", "pcre-max-filesize", 0, CLOPT_TYPE_NUMBER, MATCH_SIZE, CLI_DEFAULT_PCRE_MAX_FILESIZE, NULL, 0, OPT_CLAMD | OPT_CLAMSCAN, "This option sets the maximum filesize for which PCRE subsigs will be executed.\nFiles exceeding this limit will not have PCRE subsigs executed unless a subsig is encompassed to a smaller buffer.\nNegative values are not allowed.\nSetting this value to zero disables the limit.\nWARNING: setting this limit too high or disabling it may severely impact performance.", "25M" },
 
     /* OnAccess settings */
     { "ScanOnAccess", NULL, 0, CLOPT_TYPE_BOOL, MATCH_BOOL, -1, NULL, 0, OPT_CLAMD, "This option enables on-access scanning (Linux only)", "no" },
 
-    { "OnAccessIncludePath", NULL, 0, CLOPT_TYPE_STRING, NULL, -1, NULL, FLAG_MULTIPLE, OPT_CLAMD, "This option specifies a directory (including all files and directories\ninside it), which should be scanned on access. This option can\nbe used multiple times.", "/home\n/students" },
+    { "OnAccessMountPath", NULL, 0, CLOPT_TYPE_STRING, NULL, -1, NULL, FLAG_MULTIPLE, OPT_CLAMD, "This option specifies a directory or mount point which should be scanned on access. The mount point specified, or the mount point containing the specified directory will be watched, but only notifications will occur. If any directories are specified, this option will preempt the DDD system. It can also be used multiple times.", "/\n/home/user" },
 
-    { "OnAccessExcludePath", NULL, 0, CLOPT_TYPE_STRING, NULL, -1, NULL, FLAG_MULTIPLE, OPT_CLAMD, "This option allows excluding directories from on-access scanning. It can\nbe used multiple times.", "/home/bofh\n/root" },
+    { "OnAccessIncludePath", "on-access-include", 0, CLOPT_TYPE_STRING, NULL, -1, NULL, FLAG_MULTIPLE, OPT_CLAMD, "This option specifies a directory (including all files and directories\ninside it), which should be scanned on access. This option can\nbe used multiple times.", "/home\n/students" },
+
+    { "OnAccessExcludePath", NULL, 0, CLOPT_TYPE_STRING, NULL, -1, NULL, FLAG_MULTIPLE, OPT_CLAMD, "This option allows excluding directories from on-access scanning. It can\nbe used multiple times. Only works with DDD system.", "/home/bofh\n/root" },
 
     { "OnAccessExcludeUID", NULL, 0, CLOPT_TYPE_NUMBER, MATCH_NUMBER, -1, NULL, FLAG_MULTIPLE, OPT_CLAMD, "With this option you can whitelist specific UIDs. Processes with these UIDs\nwill be able to access all files.\nThis option can be used multiple times (one per line).", "0" },
 
     { "OnAccessMaxFileSize", NULL, 0, CLOPT_TYPE_SIZE, MATCH_SIZE, 5242880, NULL, 0, OPT_CLAMD, "Files larger than this value will not be scanned in on access.", "5M" },
+
+    { "OnAccessDisableDDD", "disable-ddd", 0, CLOPT_TYPE_BOOL, MATCH_BOOL, 0, NULL, 0, OPT_CLAMD, "This option toggles the dynamic directory determination system for on-access scanning (Linux only).", "no" },
+
+    { "OnAccessPrevention", NULL, 0, CLOPT_TYPE_BOOL, MATCH_BOOL, 0, NULL, 0, OPT_CLAMD, "This option changes fanotify behavior to prevent access attempts on malicious files instead of simply notifying the user (On Access scan only).", "yes" },
+
+    { "OnAccessExtraScanning", NULL, 0, CLOPT_TYPE_BOOL, MATCH_BOOL, 0, NULL, 0, OPT_CLAMD, "Enables extra scanning and notification after catching certain inotify events. Only works with the DDD system enabled.", "yes" },
 
     /* FIXME: mark these as private and don't output into clamd.conf/man */
     { "DevACOnly", "dev-ac-only", 0, CLOPT_TYPE_BOOL, MATCH_BOOL, -1, NULL, FLAG_HIDDEN, OPT_CLAMD | OPT_CLAMSCAN, "", "" },

@@ -1,6 +1,7 @@
 /*
  * Extract component parts of MS XML files (e.g. MS Office 2003 XML Documents)
  * 
+ * Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  * Copyright (C) 2007-2013 Sourcefire, Inc.
  * 
  * Authors: Kevin Lin
@@ -77,24 +78,6 @@ static const struct key_entry msxml_keys[] = {
     { "styles",             "Styles",             MSXML_IGNORE_ELEM }
 };
 static size_t num_msxml_keys = sizeof(msxml_keys) / sizeof(struct key_entry);
-
-enum msxml_state {
-    MSXML_STATE_NORMAL = 0,
-    MSXML_STATE_ENTITY_START_1,
-    MSXML_STATE_ENTITY_START_2,
-    MSXML_STATE_ENTITY_HEX,
-    MSXML_STATE_ENTITY_DEC,
-    MSXML_STATE_ENTITY_CLOSE,
-    MSXML_STATE_ENTITY_NONE
-};
-
-struct msxml_cbdata {
-    enum msxml_state state;
-    fmap_t *map;
-    const unsigned char *window;
-    off_t winpos, mappos;
-    size_t winsize;
-};
 
 static inline size_t msxml_read_cb_new_window(struct msxml_cbdata *cbdata)
 {
@@ -270,7 +253,7 @@ int cli_scanmsxml(cli_ctx *ctx)
         return ret; // libxml2 failed!
     }
 
-    ret = cli_msxml_parse_document(ctx, reader, msxml_keys, num_msxml_keys, 1);
+    ret = cli_msxml_parse_document(ctx, reader, msxml_keys, num_msxml_keys, 1, NULL);
 
     xmlTextReaderClose(reader);
     xmlFreeTextReader(reader);

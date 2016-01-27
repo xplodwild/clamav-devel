@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2014 Cisco and/or its affiliates. All rights reserved.
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2007-2013 Sourcefire, Inc.
  *
  *  Authors: Tomasz Kojm
@@ -90,6 +90,7 @@ struct cli_dconf {
 #define ARCH_CONF_XAR       0x80000
 #define ARCH_CONF_HFSPLUS   0x100000
 #define ARCH_CONF_XZ        0x200000
+#define ARCH_CONF_PASSWD    0x400000
 
 /* Document flags */
 #define DOC_CONF_HTML		0x1

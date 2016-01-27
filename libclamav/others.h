@@ -1,6 +1,6 @@
 /*
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2007-2013 Sourcefire, Inc.
- *  Copyright (C) 2014 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *
  *  Authors: Tomasz Kojm
  *
@@ -50,10 +50,14 @@
 #include "bytecode_api.h"
 #include "events.h"
 #include "crtmgr.h"
+
 #ifdef HAVE_JSON
 #include "json.h"
 #endif
+
+#ifdef HAVE_YARA
 #include "yara_clam.h"
+#endif
 
 #if HAVE_LIBXML2
 #define CLAMAV_MIN_XMLREADER_FLAGS (XML_PARSE_NOERROR | XML_PARSE_NONET)
@@ -68,7 +72,7 @@
  * in re-enabling affected modules.
  */
 
-#define CL_FLEVEL 81
+#define CL_FLEVEL 82
 #define CL_FLEVEL_DCONF	CL_FLEVEL
 #define CL_FLEVEL_SIGTOOL CL_FLEVEL
 
@@ -125,8 +129,7 @@ typedef struct bitset_tag
 /* internal clamav context */
 typedef struct cli_ctx_tag {
     const char **virname;
-    unsigned int num_viruses;         /* manages virname when CL_SCAN_ALLMATCHES == 1 */
-    unsigned int size_viruses;        /* manages virname when CL_SCAN_ALLMATCHES == 1 */
+    unsigned int num_viruses;
     unsigned long int *scanned;
     const struct cli_matcher *root;
     const struct cl_engine *engine;
@@ -230,6 +233,20 @@ struct cli_dbinfo {
     struct cli_dbinfo *next;
 };
 
+#define CLI_PWDB_COUNT 3
+typedef enum {
+    CLI_PWDB_ANY = 0,
+    CLI_PWDB_ZIP = 1,
+    CLI_PWDB_RAR = 2
+} cl_pwdb_t;
+
+struct cli_pwdb {
+    char *name;
+    unsigned char *passwd;
+    uint16_t length;
+    struct cli_pwdb *next;
+};
+
 struct cl_engine {
     uint32_t refcount; /* reference counter */
     uint32_t sdb;
@@ -286,6 +303,9 @@ struct cl_engine {
     struct cli_ftype *ftypes;
     struct cli_ftype *ptypes;
 
+    /* Container password storage */
+    struct cli_pwdb **pwdbs;
+
     /* Ignored signatures */
     struct cli_matcher *ignored;
 
@@ -311,6 +331,7 @@ struct cl_engine {
     clcb_pre_cache cb_pre_cache;
     clcb_pre_scan cb_pre_scan;
     clcb_post_scan cb_post_scan;
+    clcb_virus_found cb_virus_found;
     clcb_sigload cb_sigload;
     void *cb_sigload_ctx;
     clcb_hash cb_hash;
@@ -349,6 +370,7 @@ struct cl_engine {
 
     /* Engine max settings */
     uint32_t maxiconspe; /* max number of icons to scan for PE */
+    uint32_t maxrechwp3; /* max recursive calls for HWP3 parsing */
 
     /* millisecond time limit for preclassification scanning */
     uint32_t time_limit;
@@ -358,8 +380,10 @@ struct cl_engine {
     uint64_t pcre_recmatch_limit;
     uint64_t pcre_max_filesize;
 
+#ifdef HAVE_YARA
     /* YARA */
     struct _yara_global * yara_global;
+#endif
 };
 
 struct cl_settings {
@@ -388,6 +412,7 @@ struct cl_settings {
     clcb_pre_cache cb_pre_cache;
     clcb_pre_scan cb_pre_scan;
     clcb_post_scan cb_post_scan;
+    clcb_virus_found cb_virus_found;
     clcb_sigload cb_sigload;
     void *cb_sigload_ctx;
     clcb_msg cb_msg;
@@ -418,6 +443,7 @@ struct cl_settings {
 
     /* Engine max settings */
     uint32_t maxiconspe; /* max number of icons to scan for PE */
+    uint32_t maxrechwp3; /* max recursive calls for HWP3 parsing */
 
     /* PCRE matching limitations */
     uint64_t pcre_match_limit;
@@ -518,30 +544,30 @@ struct unaligned_ptr {
 #define be32_to_host(v)	(v)
 #define be64_to_host(v)	(v)
 
-static inline int32_t cli_readint32(const char *buff)
+static inline int32_t cli_readint32(const void *buff)
 {
 	int32_t ret;
-    ret = buff[0] & 0xff;
-    ret |= (buff[1] & 0xff) << 8;
-    ret |= (buff[2] & 0xff) << 16;
-    ret |= (buff[3] & 0xff) << 24;
+    ret = ((const char *)buff)[0] & 0xff;
+    ret |= (((const char *)buff)[1] & 0xff) << 8;
+    ret |= (((const char *)buff)[2] & 0xff) << 16;
+    ret |= (((const char *)buff)[3] & 0xff) << 24;
     return ret;
 }
 
-static inline int16_t cli_readint16(const char *buff)
+static inline int16_t cli_readint16(const void *buff)
 {
 	int16_t ret;
-    ret = buff[0] & 0xff;
-    ret |= (buff[1] & 0xff) << 8;
+    ret = ((const char *)buff)[0] & 0xff;
+    ret |= (((const char *)buff)[1] & 0xff) << 8;
     return ret;
 }
 
-static inline void cli_writeint32(char *offset, uint32_t value)
+static inline void cli_writeint32(void *offset, uint32_t value)
 {
-    offset[0] = value & 0xff;
-    offset[1] = (value & 0xff00) >> 8;
-    offset[2] = (value & 0xff0000) >> 16;
-    offset[3] = (value & 0xff000000) >> 24;
+    ((char *)offset)[0] = value & 0xff;
+    ((char *)offset)[1] = (value & 0xff00) >> 8;
+    ((char *)offset)[2] = (value & 0xff0000) >> 16;
+    ((char *)offset)[3] = (value & 0xff000000) >> 24;
 }
 #endif
 

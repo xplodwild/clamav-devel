@@ -260,8 +260,10 @@ char *pdf_finalize_string(struct pdf_struct *pdf, struct pdf_obj *obj, const cha
     /* TODO: replace the escape sequences directly in the wrkstr   */
     if (strchr(wrkstr, '\\')) {
         output = cli_calloc(wrklen+1, sizeof(char));
-        if (!output)
+        if (!output) {
+            free(wrkstr);
             return NULL;
+        }
 
         outlen = 0;
         for (i = 0; i < wrklen; ++i) {
@@ -319,7 +321,12 @@ char *pdf_finalize_string(struct pdf_struct *pdf, struct pdf_obj *obj, const cha
         }
 
         free(wrkstr);
-        wrkstr = cli_strdup(output);
+        wrkstr = cli_calloc(outlen+1, sizeof(char));
+        if (!wrkstr) {
+            free(output);
+            return NULL;
+        }
+        memcpy(wrkstr, output, outlen);
         free(output);
         wrklen = outlen;
     }
@@ -504,8 +511,14 @@ char *pdf_parse_string(struct pdf_struct *pdf, struct pdf_obj *obj, const char *
                     res = pdf_finalize_string(pdf, obj, begin, objsize2);
                     if (!res) {
                         res = cli_calloc(1, objsize2+1);
-                        if (!(res))
+                        if (!(res)) {
+                            close(fd);
+                            cli_unlink(newobj->path);
+                            free(newobj->path);
+                            newobj->path = NULL;
+                            free(begin);
                             return NULL;
+                        }
                         memcpy(res, begin, objsize2);
                         res[objsize2] = '\0';
 
@@ -545,12 +558,27 @@ char *pdf_parse_string(struct pdf_struct *pdf, struct pdf_obj *obj, const char *
             return NULL;
         }
 
-        res = cli_calloc(1, (p2 - p1) + 2);
-        if (!(res))
-            return NULL;
 
-        strncpy(res, p1, (p2 - p1) + 1);
-        if (endchar)
+        res = pdf_finalize_string(pdf, obj, p1, (p2 - p1) + 1);
+        if (!res) {
+            res = cli_calloc(1, (p2 - p1) + 2);
+            if (!(res))
+                return NULL;
+            memcpy(res, p1, (p2 - p1) + 1);
+            res[(p2 - p1) + 1] = '\0';
+
+            if (meta) {
+                meta->length = (p2 - p1) + 1;
+                meta->obj = obj;
+                meta->success = 0;
+            }
+        } else if (meta) {
+            meta->length = strlen(res);
+            meta->obj = obj;
+            meta->success = 1;
+        }
+
+        if (res && endchar)
             *endchar = p2;
 
         return res;

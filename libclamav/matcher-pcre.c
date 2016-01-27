@@ -1,8 +1,8 @@
 /*
  *  Support for matcher using PCRE
  *
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2007-2013 Sourcefire, Inc.
- *  Copyright (C) 2014 Cisco Systems, Inc.
  *  All Rights Reserved.
  *
  *  Authors: Kevin Lin
@@ -59,7 +59,7 @@ unsigned int p_sigid = 0;
 static void pcre_perf_events_init(struct cli_pcre_meta *pm, const char *virname)
 {
     int ret;
-    size_t namelen = strlen(virname)+strlen(pm->pdata.expression)+3;
+    size_t namelen;
 
     if (!p_sigevents) {
         p_sigevents = cli_events_new(MAX_PCRE_SIGEVENT_ID);
@@ -74,8 +74,12 @@ static void pcre_perf_events_init(struct cli_pcre_meta *pm, const char *virname)
         return;
     }
 
-    if (!virname)
+    if (!virname) {
         virname = "(null)";
+        namelen = 7;
+    } else {
+        namelen = strlen(virname)+strlen(pm->pdata.expression)+3;
+    }
 
     /* set the name */
     pm->statname = (char*)cli_calloc(1, namelen);
@@ -182,6 +186,11 @@ void cli_pcre_perf_events_destroy()
 
 
 /* PCRE MATCHER FUNCTIONS */
+int cli_pcre_init()
+{
+    return cli_pcre_init_internal();
+}
+
 int cli_pcre_addpatt(struct cli_matcher *root, const char *virname, const char *trigger, const char *pattern, const char *cflags, const char *offset, const uint32_t *lsigid, unsigned int options)
 {
     struct cli_pcre_meta **newmetatable = NULL, *pm = NULL;
@@ -246,18 +255,18 @@ int cli_pcre_addpatt(struct cli_matcher *root, const char *virname, const char *
         return CL_EMEM;
     }
 
-    pm->trigger = strdup(trigger);
+    pm->trigger = cli_mpool_strdup(root->mempool, trigger);
     if (!pm->trigger) {
         cli_errmsg("cli_pcre_addpatt: Unable to allocate memory for trigger string\n");
-        cli_pcre_freemeta(pm);
+        cli_pcre_freemeta(root, pm);
         mpool_free(root->mempool, pm);
         return CL_EMEM;
     }
 
-    pm->virname = (char *)cli_virname(virname, options & CL_DB_OFFICIAL);
+    pm->virname = (char *)cli_mpool_virname(root->mempool, virname, options & CL_DB_OFFICIAL);
     if(!pm->virname) {
         cli_errmsg("cli_pcre_addpatt: Unable to allocate memory for virname or NULL virname\n");
-        cli_pcre_freemeta(pm);
+        cli_pcre_freemeta(root, pm);
         mpool_free(root->mempool, pm);
         return CL_EMEM;
     }
@@ -277,7 +286,7 @@ int cli_pcre_addpatt(struct cli_matcher *root, const char *virname, const char *
     pm->pdata.expression = strdup(pattern);
     if (!pm->pdata.expression) {
         cli_errmsg("cli_pcre_addpatt: Unable to allocate memory for expression\n");
-        cli_pcre_freemeta(pm);
+        cli_pcre_freemeta(root, pm);
         mpool_free(root->mempool, pm);
         return CL_EMEM;
     }
@@ -287,7 +296,7 @@ int cli_pcre_addpatt(struct cli_matcher *root, const char *virname, const char *
     ret = cli_caloff(offset, NULL, root->type, pm->offdata, &(pm->offset_min), &(pm->offset_max));
     if (ret != CL_SUCCESS) {
         cli_errmsg("cli_pcre_addpatt: cannot calculate offset data: %s for pattern: %s\n", offset, pattern);
-        cli_pcre_freemeta(pm);
+        cli_pcre_freemeta(root, pm);
         mpool_free(root->mempool, pm);
         return ret;
     }
@@ -311,7 +320,7 @@ int cli_pcre_addpatt(struct cli_matcher *root, const char *virname, const char *
             case 'e':  pm->flags |= CLI_PCRE_ENCOMPASS;         break;
             default:
                 cli_errmsg("cli_pcre_addpatt: unknown/extra pcre option encountered %c\n", *opt);
-                cli_pcre_freemeta(pm);
+                cli_pcre_freemeta(root, pm);
                 mpool_free(root->mempool, pm);
                 return CL_EMALFDB;
             }
@@ -352,7 +361,7 @@ int cli_pcre_addpatt(struct cli_matcher *root, const char *virname, const char *
                                          pcre_count * sizeof(struct cli_pcre_meta *));
     if (!newmetatable) {
         cli_errmsg("cli_pcre_addpatt: Unable to allocate memory for new pcre meta table\n");
-        cli_pcre_freemeta(pm);
+        cli_pcre_freemeta(root, pm);
         mpool_free(root->mempool, pm);
         return CL_EMEM;
     }
@@ -557,8 +566,8 @@ int cli_pcre_scanbuf(const unsigned char *buffer, uint32_t length, const char **
     struct cli_pcre_data *pd;
     struct cli_ac_result *newres;
     uint32_t adjbuffer, adjshift, adjlength;
-    unsigned int i, evalcnt;
-    uint64_t evalids, maxfilesize;
+    unsigned int i, evalcnt = 0;
+    uint64_t maxfilesize, evalids = 0;
     uint32_t global, encompass, rolling;
     int rc, lrc, offset, options=0, ovector[OVECCOUNT];
     uint8_t viruses_found = 0;
@@ -688,7 +697,7 @@ int cli_pcre_scanbuf(const unsigned char *buffer, uint32_t length, const char **
                     if(res) {
                         newres = (struct cli_ac_result *)cli_calloc(1, sizeof(struct cli_ac_result));
                         if(!newres) {
-                            cli_errmsg("cli_pcre_scanbuff: Can't allocate memory for newres %u\n", sizeof(struct cli_ac_result));
+                            cli_errmsg("cli_pcre_scanbuff: Can't allocate memory for new result\n");
                             return CL_EMEM;
                         }
                         newres->virname = pm->virname;
@@ -743,18 +752,18 @@ int cli_pcre_scanbuf(const unsigned char *buffer, uint32_t length, const char **
     return CL_SUCCESS;
 }
 
-void cli_pcre_freemeta(struct cli_pcre_meta *pm)
+void cli_pcre_freemeta(struct cli_matcher *root, struct cli_pcre_meta *pm)
 {
     if (!pm)
         return;
 
     if (pm->trigger) {
-        free(pm->trigger);
+        mpool_free(root->mempool, pm->trigger);
         pm->trigger = NULL;
     }
 
     if (pm->virname) {
-        free(pm->virname);
+        mpool_free(root->mempool, pm->virname);
         pm->virname = NULL;
     }
 
@@ -774,7 +783,7 @@ void cli_pcre_freetable(struct cli_matcher *root)
     for (i = 0; i < root->pcre_metas; ++i) {
         /* free pcre meta */
         pm = root->pcre_metatable[i];
-        cli_pcre_freemeta(pm);
+        cli_pcre_freemeta(root, pm);
         mpool_free(root->mempool, pm);
     }
 
@@ -786,6 +795,50 @@ void cli_pcre_freetable(struct cli_matcher *root)
 
 #else
 /* NO-PCRE FUNCTIONS */
+void cli_pcre_perf_print()
+{
+    cli_errmsg("cli_pcre_perf_print: Cannot print PCRE performance results without PCRE support\n");
+    return;
+}
+
+void cli_pcre_perf_events_destroy()
+{
+    cli_errmsg("cli_pcre_perf_events_destroy: Cannot destroy PCRE performance results without PCRE support\n");
+    return;
+}
+
+int cli_pcre_init()
+{
+    cli_errmsg("cli_pcre_init: Cannot initialize PCRE without PCRE support\n");
+    return CL_SUCCESS;
+}
+
+int cli_pcre_build(struct cli_matcher *root, long long unsigned match_limit, long long unsigned recmatch_limit, const struct cli_dconf *dconf)
+{
+    UNUSEDPARAM(root);
+    UNUSEDPARAM(match_limit);
+    UNUSEDPARAM(recmatch_limit);
+    UNUSEDPARAM(dconf);
+
+    cli_errmsg("cli_pcre_build: Cannot build PCRE expression without PCRE support\n");
+    return CL_SUCCESS;
+}
+
+int cli_pcre_scanbuf(const unsigned char *buffer, uint32_t length, const char **virname, struct cli_ac_result **res, const struct cli_matcher *root, struct cli_ac_data *mdata, const struct cli_pcre_off *data, cli_ctx *ctx)
+{
+    UNUSEDPARAM(buffer);
+    UNUSEDPARAM(length);
+    UNUSEDPARAM(virname);
+    UNUSEDPARAM(res);
+    UNUSEDPARAM(root);
+    UNUSEDPARAM(mdata);
+    UNUSEDPARAM(data);
+    UNUSEDPARAM(ctx);
+
+    cli_errmsg("cli_pcre_scanbuf: Cannot scan buffer with PCRE expression without PCRE support\n");
+    return CL_SUCCESS;
+}
+
 int cli_pcre_recaloff(struct cli_matcher *root, struct cli_pcre_off *data, struct cli_target_info *info, cli_ctx *ctx)
 {
     UNUSEDPARAM(root);

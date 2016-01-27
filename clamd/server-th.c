@@ -1,4 +1,5 @@
 /*
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2007-2009 Sourcefire, Inc.
  *
  *  Authors: Tomasz Kojm, Trog, Török Edvin
@@ -49,7 +50,7 @@
 #include "shared/output.h"
 #include "shared/optparser.h"
 
-#include "fan.h"
+#include "onaccess_fan.h"
 #include "server.h"
 #include "thrmgr.h"
 #include "session.h"
@@ -883,6 +884,16 @@ int recvloop_th(int *socketds, unsigned nsockets, struct cl_engine *engine, unsi
     val = cl_engine_get_num(engine, CL_ENGINE_MAX_ICONSPE, NULL);
     logg("Limits: MaxIconsPE limit set to %llu.\n", val);
 
+    if((opt = optget(opts, "MaxRecHWP3"))->active) {
+        if((ret = cl_engine_set_num(engine, CL_ENGINE_MAX_RECHWP3, opt->numarg))) {
+            logg("!cli_engine_set_num(MaxRecHWP3) failed: %s\n", cl_strerror(ret));
+            cl_engine_free(engine);
+            return 1;
+        }
+    }
+    val = cl_engine_get_num(engine, CL_ENGINE_MAX_RECHWP3, NULL);
+    logg("Limits: MaxRecHWP3 limit set to %llu.\n", val);
+
     if((opt = optget(opts, "PCREMatchLimit"))->active) {
         if((ret = cl_engine_set_num(engine, CL_ENGINE_PCRE_MATCH_LIMIT, opt->numarg))) {
             logg("!cli_engine_set_num(PCREMatchLimit) failed: %s\n", cl_strerror(ret));
@@ -1140,6 +1151,7 @@ int recvloop_th(int *socketds, unsigned nsockets, struct cl_engine *engine, unsi
     acceptdata.max_queue = max_queue;
 
     if(optget(opts, "ScanOnAccess")->enabled)
+
 #if defined(FANOTIFY) || defined(CLAMAUTH)
     {
         do {
@@ -1149,7 +1161,7 @@ int recvloop_th(int *socketds, unsigned nsockets, struct cl_engine *engine, unsi
 	    tharg->opts = opts;
 	    tharg->engine = engine;
 	    tharg->options = options;
-	    if(!pthread_create(&fan_pid, &fan_attr, fan_th, tharg)) break;
+	    if(!pthread_create(&fan_pid, &fan_attr, onas_fan_th, tharg)) break;
 	    free(tharg);
 	    tharg=NULL;
 	} while(0);
@@ -1158,6 +1170,7 @@ int recvloop_th(int *socketds, unsigned nsockets, struct cl_engine *engine, unsi
 #else
 	logg("!On-access scan is not available\n");
 #endif
+
 
 #ifndef	_WIN32
     /* set up signal handling */
@@ -1424,15 +1437,7 @@ int recvloop_th(int *socketds, unsigned nsockets, struct cl_engine *engine, unsi
 	pthread_mutex_lock(&reload_mutex);
 	if(reload) {
 	    pthread_mutex_unlock(&reload_mutex);
-#if defined(FANOTIFY) || defined(CLAMAUTH)
-	    if(optget(opts, "ScanOnAccess")->enabled && tharg) {
-		logg("Restarting on-access scan\n");
-		pthread_mutex_lock(&logg_mutex);
-		pthread_kill(fan_pid, SIGUSR1);
-		pthread_mutex_unlock(&logg_mutex);
-		pthread_join(fan_pid, NULL);
-	    }
-#endif
+
 	    engine = reload_db(engine, dboptions, opts, FALSE, &ret);
 	    if(ret) {
 		logg("Terminating because of a fatal error.\n");
@@ -1445,10 +1450,10 @@ int recvloop_th(int *socketds, unsigned nsockets, struct cl_engine *engine, unsi
 	    reload = 0;
 	    time(&reloaded_time);
 	    pthread_mutex_unlock(&reload_mutex);
+
 #if defined(FANOTIFY) || defined(CLAMAUTH)
 	    if(optget(opts, "ScanOnAccess")->enabled && tharg) {
 		tharg->engine = engine;
-		pthread_create(&fan_pid, &fan_attr, fan_th, tharg);
 	    }
 #endif
 	    time(&start_time);

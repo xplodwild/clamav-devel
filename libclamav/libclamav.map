@@ -17,6 +17,7 @@ CLAMAV_PUBLIC {
     cl_set_clcb_msg;
     cl_engine_set_clcb_pre_scan;
     cl_engine_set_clcb_post_scan;
+    cl_engine_set_clcb_virus_found;
     cl_engine_set_clcb_sigload;
     cl_engine_set_clcb_pre_cache;
     cl_engine_settings_copy;
@@ -74,6 +75,7 @@ CLAMAV_PRIVATE {
     cli_gettmpdir;
     cli_strtok;
     cli_strtokenize;
+    cli_ldbtokenize;
     cli_strlcat;
     cli_strlcpy;
     cli_cvdunpack;
@@ -103,6 +105,9 @@ CLAMAV_PRIVATE {
     cli_str2hex;
     cli_hashfile;
     cli_hashstream;
+    text_normalize_init;
+    text_normalize_reset;
+    text_normalize_map;
     html_normalise_map;
     cli_utf16toascii;
 

@@ -1,4 +1,5 @@
 /*
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2007-2012 Sourcefire, Inc.
  *
  *  Authors: Tomasz Kojm
@@ -202,7 +203,7 @@ void help(void)
     mprintf("\n");
     mprintf("                       Clam AntiVirus Scanner %s\n", get_version());
     printf("           By The ClamAV Team: http://www.clamav.net/about.html#credits\n");
-    printf("           (C) 2007-2009 Sourcefire, Inc.\n\n");
+    printf("           (C) 2007-2015 Cisco Systems, Inc.\n\n");
 
     mprintf("    --help                -h             Print this help screen\n");
     mprintf("    --version             -V             Print version number\n");
@@ -279,6 +280,7 @@ void help(void)
     mprintf("    --max-ziptypercg=#n                  Maximum size zip to type reanalyze\n");
     mprintf("    --max-partitions=#n                  Maximum number of partitions in disk image to be scanned\n");
     mprintf("    --max-iconspe=#n                     Maximum number of icons in PE file to be scanned\n");
+    mprintf("    --max-rechwp3=#n                     Maximum recursive calls to HWP3 parsing function\n");
 #if HAVE_PCRE
     mprintf("    --pcre-match-limit=#n                Maximum calls to the PCRE match function.\n");
     mprintf("    --pcre-recmatch-limit=#n             Maximum recursive calls to the PCRE match function.\n");
@@ -288,6 +290,7 @@ void help(void)
     mprintf("    --disable-pe-stats                   Disable submission of individual PE sections in stats submissions\n");
     mprintf("    --stats-timeout=#n                   Number of seconds to wait for waiting a response back from the stats server\n");
     mprintf("    --stats-host-id=UUID                 Set the Host ID used when submitting statistical info.\n");
+    mprintf("    --disable-cache                      Disable caching and cache checks for hash sums of scanned files.\n");
     mprintf("\n");
     mprintf("(*) Default scan settings\n");
     mprintf("(**) Certain files (e.g. documents, archives, etc.) may in turn contain other\n");

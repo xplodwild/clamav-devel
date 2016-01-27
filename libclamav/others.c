@@ -1,4 +1,5 @@
 /*
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2007-2010 Sourcefire, Inc.
  *
  *  Authors: Tomasz Kojm, Trog
@@ -71,6 +72,7 @@
 #include "regex/regex.h"
 #include "ltdl.h"
 #include "matcher-ac.h"
+#include "matcher-pcre.h"
 #include "default.h"
 #include "scanners.h"
 #include "bytecode.h"
@@ -377,9 +379,22 @@ struct cl_engine *cl_engine_new(void)
 	return NULL;
     }
 
+    new->pwdbs = mpool_calloc(new->mempool, CLI_PWDB_COUNT, sizeof(struct cli_pwdb *));
+    if (!new->pwdbs) {
+	cli_errmsg("cl_engine_new: Can't initialize password databases\n");
+	mpool_free(new->mempool, new->dconf);
+	mpool_free(new->mempool, new->root);
+#ifdef USE_MPOOL
+	mpool_destroy(new->mempool);
+#endif
+	free(new);
+	return NULL;
+    }
+
     crtmgr_init(&(new->cmgr));
     if(crtmgr_add_roots(new, &(new->cmgr)))  {
 	cli_errmsg("cl_engine_new: Can't initialize root certificates\n");
+	mpool_free(new->mempool, new->pwdbs);
 	mpool_free(new->mempool, new->dconf);
 	mpool_free(new->mempool, new->root);
 #ifdef USE_MPOOL
@@ -395,6 +410,7 @@ struct cl_engine *cl_engine_new(void)
 #ifdef CL_THREAD_SAFE
         if (pthread_mutex_init(&(intel->mutex), NULL)) {
             cli_errmsg("cli_engine_new: Cannot initialize stats gathering mutex\n");
+	    mpool_free(new->mempool, new->pwdbs);
             mpool_free(new->mempool, new->dconf);
             mpool_free(new->mempool, new->root);
 #ifdef USE_MPOOL
@@ -428,6 +444,7 @@ struct cl_engine *cl_engine_new(void)
 
     /* Engine max settings */
     new->maxiconspe = CLI_DEFAULT_MAXICONSPE;
+    new->maxrechwp3 = CLI_DEFAULT_MAXRECHWP3;
 
     /* PCRE matching limitations */
 #if HAVE_PCRE
@@ -437,8 +454,12 @@ struct cl_engine *cl_engine_new(void)
     new->pcre_recmatch_limit = CLI_DEFAULT_PCRE_RECMATCH_LIMIT;
     new->pcre_max_filesize = CLI_DEFAULT_PCRE_MAX_FILESIZE;
 
+#ifdef HAVE_YARA
+
+    /* YARA */
     if (cli_yara_init(new) != CL_SUCCESS) {
         cli_errmsg("cli_engine_new: failed to initialize YARA\n");
+	mpool_free(new->mempool, new->pwdbs);
         mpool_free(new->mempool, new->dconf);
         mpool_free(new->mempool, new->root);
 #ifdef USE_MPOOL
@@ -448,6 +469,8 @@ struct cl_engine *cl_engine_new(void)
         free(intel);
         return NULL;
     }
+
+#endif
 
     cli_dbgmsg("Initialized %s engine\n", cl_retver());
     return new;
@@ -594,6 +617,9 @@ int cl_engine_set_num(struct cl_engine *engine, enum cl_engine_field field, long
 	case CL_ENGINE_MAX_ICONSPE:
 	    engine->maxiconspe = (uint32_t)num;
 	    break;
+    case CL_ENGINE_MAX_RECHWP3:
+	    engine->maxrechwp3 = (uint32_t)num;
+	    break;
 	case CL_ENGINE_TIME_LIMIT:
             engine->time_limit = (uint32_t)num;
             break;
@@ -679,6 +705,8 @@ long long cl_engine_get_num(const struct cl_engine *engine, enum cl_engine_field
 	    return engine->maxpartitions;
 	case CL_ENGINE_MAX_ICONSPE:
 	    return engine->maxiconspe;
+    case CL_ENGINE_MAX_RECHWP3:
+	    return engine->maxrechwp3;
 	case CL_ENGINE_TIME_LIMIT:
             return engine->time_limit;
 	case CL_ENGINE_PCRE_MATCH_LIMIT:
@@ -778,6 +806,7 @@ struct cl_settings *cl_engine_settings_copy(const struct cl_engine *engine)
     settings->cb_pre_cache = engine->cb_pre_cache;
     settings->cb_pre_scan = engine->cb_pre_scan;
     settings->cb_post_scan = engine->cb_post_scan;
+    settings->cb_virus_found = engine->cb_virus_found;
     settings->cb_sigload = engine->cb_sigload;
     settings->cb_sigload_ctx = engine->cb_sigload_ctx;
     settings->cb_hash = engine->cb_hash;
@@ -797,6 +826,7 @@ struct cl_settings *cl_engine_settings_copy(const struct cl_engine *engine)
     settings->maxpartitions = engine->maxpartitions;
 
     settings->maxiconspe = engine->maxiconspe;
+    settings->maxrechwp3 = engine->maxrechwp3;
 
     settings->pcre_match_limit = engine->pcre_match_limit;
     settings->pcre_recmatch_limit = engine->pcre_recmatch_limit;
@@ -850,6 +880,7 @@ int cl_engine_settings_apply(struct cl_engine *engine, const struct cl_settings 
     engine->cb_pre_cache = settings->cb_pre_cache;
     engine->cb_pre_scan = settings->cb_pre_scan;
     engine->cb_post_scan = settings->cb_post_scan;
+    engine->cb_virus_found = settings->cb_virus_found;
     engine->cb_sigload = settings->cb_sigload;
     engine->cb_sigload_ctx = settings->cb_sigload_ctx;
     engine->cb_hash = settings->cb_hash;
@@ -868,6 +899,7 @@ int cl_engine_settings_apply(struct cl_engine *engine, const struct cl_settings 
     engine->maxpartitions = settings->maxpartitions;
 
     engine->maxiconspe = settings->maxiconspe;
+    engine->maxrechwp3 = settings->maxrechwp3;
 
     engine->pcre_match_limit = settings->pcre_match_limit;
     engine->pcre_recmatch_limit = settings->pcre_recmatch_limit;
@@ -1029,29 +1061,12 @@ int cli_unlink(const char *pathname)
 
 void cli_append_virus(cli_ctx * ctx, const char * virname)
 {
-    if (!ctx->virname)
-	return;
-    if (SCAN_ALL) {
-	if (ctx->size_viruses == 0) {
-	    if (!(ctx->virname = malloc(2 * sizeof(char *)))) {
-		cli_errmsg("cli_append_virus: fails on malloc() - virus %s virname not appended.\n", virname);
-		return;
-	    }
-	    ctx->size_viruses = 2;
-	} else if (ctx->num_viruses+1 == ctx->size_viruses) {
-	    void * newptr = NULL;
-	    if ((newptr = realloc((void *)ctx->virname, 2 * ctx->size_viruses * sizeof (char *))) == NULL) {
-		cli_errmsg("cli_append_virus: fails on realloc() - virus %s virname not appended.\n", virname);
-		return;
-	    }
-	    ctx->virname = newptr;
-	    ctx->size_viruses *= 2;
-	}
-	ctx->virname[ctx->num_viruses++] = virname;
-	ctx->virname[ctx->num_viruses] = NULL;
-    }
-    else
-	*ctx->virname = virname;
+    if (ctx->virname == NULL)
+        return;
+    if (ctx->engine->cb_virus_found)
+        ctx->engine->cb_virus_found(fmap_fd(*ctx->fmap), virname, ctx->cb_ctx);
+    ctx->num_viruses++;
+    *ctx->virname = virname;
 #if HAVE_JSON
     if (SCAN_PROPERTIES && ctx->wrkproperty) {
         json_object *arrobj, *virobj;
@@ -1077,11 +1092,7 @@ const char * cli_get_last_virus(const cli_ctx * ctx)
 {
     if (!ctx || !ctx->virname || !(*ctx->virname))
 	return NULL;
-
-    if (SCAN_ALL && ctx->num_viruses)
-	return ctx->virname[ctx->num_viruses-1];
-    else
-	return *ctx->virname;
+    return *ctx->virname;
 }
 
 const char * cli_get_last_virus_str(const cli_ctx * ctx)
@@ -1357,6 +1368,10 @@ void cl_engine_set_clcb_pre_scan(struct cl_engine *engine, clcb_pre_scan callbac
 
 void cl_engine_set_clcb_post_scan(struct cl_engine *engine, clcb_post_scan callback) {
     engine->cb_post_scan = callback;
+}
+
+void cl_engine_set_clcb_virus_found(struct cl_engine *engine, clcb_virus_found callback) {
+    engine->cb_virus_found = callback;
 }
 
 void cl_engine_set_clcb_sigload(struct cl_engine *engine, clcb_sigload callback, void *context) {

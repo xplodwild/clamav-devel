@@ -78,14 +78,18 @@
 #include "bytecode_priv.h"
 #include "cache.h"
 #include "openioc.h"
+
 #ifdef CL_THREAD_SAFE
 #  include <pthread.h>
 static pthread_mutex_t cli_ref_mutex = PTHREAD_MUTEX_INITIALIZER;
 #endif
+
+#ifdef HAVE_YARA
 #include "yara_clam.h"
 #include "yara_compiler.h"
 #include "yara_grammar.h"
 #include "yara_lexer.h"
+#endif
 
 
 #define MAX_LDB_SUBSIGS 64
@@ -177,6 +181,7 @@ int cli_sigopts_handler(struct cli_matcher *root, const char *virname, const cha
         /* WIDE sigopt is unsupported */
         if (sigopts & ACPATT_OPTION_WIDE) {
             cli_errmsg("cli_parse_add: wide modifier [w] is not supported for regex subsigs\n");
+            free(hexcpy);
             return CL_EMALFDB;
         }
 
@@ -229,7 +234,7 @@ int cli_sigopts_handler(struct cli_matcher *root, const char *virname, const cha
 
         /* clamav-specific wildcards need to be handled here! */
         for (i = 0; i < strlen(hexcpy); ++i) {
-            size_t len = strlen(hexovr);
+           size_t len = strlen(hexovr);
 
             if (hexcpy[i] == '*' || hexcpy[i] == '|' || hexcpy[i] == ')') {
                 hexovr[len] = hexcpy[i];
@@ -334,10 +339,10 @@ int cli_parse_add(struct cli_matcher *root, const char *virname, const char *hex
         patt->ch_mindist[0] = smin;
         patt->ch_maxdist[0] = smax;
         patt->sigid = tid;
-        patt->length = root->ac_mindepth;
+        patt->length[0] = root->ac_mindepth;
 
         /* dummy */
-        patt->pattern = mpool_calloc(root->mempool, patt->length, sizeof(*patt->pattern));
+        patt->pattern = mpool_calloc(root->mempool, patt->length[0], sizeof(*patt->pattern));
         if (!patt->pattern) {
             free(patt);
             return CL_EMEM;
@@ -352,7 +357,7 @@ int cli_parse_add(struct cli_matcher *root, const char *virname, const char *hex
         return CL_SUCCESS;
     }
     /* expected format => ^offset:trigger/regex/[cflags]$ */
-    if (strrchr(hexsig, '/')) {
+    if (strchr(hexsig, '/')) {
         char *start, *end;
         const char *trigger, *pattern, *cflags;
 
@@ -368,12 +373,14 @@ int cli_parse_add(struct cli_matcher *root, const char *virname, const char *hex
         /* get pcre-ed */
         if (start == end) {
             cli_errmsg("cli_parseadd(): PCRE subsig mismatched '/' delimiter\n");
+            free(hexcpy);
             return CL_EMALFDB;
         }
 #if HAVE_PCRE
         /* get checked */
         if (hexsig[0] == '/') {
             cli_errmsg("cli_parseadd(): PCRE subsig must contain logical trigger\n");
+            free(hexcpy);
             return CL_EMALFDB;
         }
 
@@ -435,12 +442,14 @@ int cli_parse_add(struct cli_matcher *root, const char *virname, const char *hex
             else if(hexsig[i] == '{') {
                 if (nest) {
                     cli_errmsg("cli_parse_add(): Alternative match contains unsupported ranged wildcard\n");
+                    free(hexcpy);
                     return CL_EMALFDB;
                 }
                 parts++;
             } else if(hexsig[i] == '*') {
                 if (nest) {
                     cli_errmsg("cli_parse_add(): Alternative match cannot contain unbounded wildcards\n");
+                    free(hexcpy);
                     return CL_EMALFDB;
                 }
                 parts++;
@@ -751,25 +760,75 @@ char *cli_dbgets(char *buff, unsigned int size, FILE *fs, struct cli_dbio *dbio)
     }
 }
 
+static char *cli_signorm(const char *signame, size_t sz, size_t *new_sz) {
+
+	char *idx = NULL;
+	char *new_signame = NULL;
+	size_t nsz = 0;
+
+	if (!signame) { 
+		*new_sz = sz;
+		return NULL;
+	}
+	sz = strlen(signame);
+
+	if (sz <= 11) { 
+		*new_sz = sz;
+		return NULL;
+	}
+	nsz = sz - 11;
+	
+	idx = signame + nsz;
+	if (strncmp(idx, ".UNOFFICIAL", 11)) { 
+		*new_sz = sz;
+		return NULL;
+	}
+
+	new_signame = malloc(nsz + 1);
+	if (!new_signame) {
+		*new_sz = sz;
+		return NULL;
+	}
+
+	memcpy(new_signame, signame, nsz);
+	new_signame[nsz] = '\0';
+
+	*new_sz = nsz;
+	return new_signame;
+}
+
 static int cli_chkign(const struct cli_matcher *ignored, const char *signame, const char *entry)
 {
+
     const char *md5_expected = NULL;
+    char *norm_signame = NULL;
     unsigned char digest[16];
+    size_t sz = 0;
 
     if(!ignored || !signame || !entry)
         return 0;
 
-    if(cli_bm_scanbuff((const unsigned char *) signame, strlen(signame), &md5_expected, NULL, ignored, 0, NULL, NULL,NULL) == CL_VIRUS) {
+    if(!(norm_signame = cli_signorm(signame, strlen(signame), &sz)))
+	norm_signame = signame;
+
+    if(cli_bm_scanbuff((const unsigned char *) norm_signame, sz, &md5_expected, NULL, ignored, 0, NULL, NULL,NULL) == CL_VIRUS) {
         if(md5_expected) {
             cl_hash_data("md5", entry, strlen(entry), digest, NULL);
-            if(memcmp(digest, (const unsigned char *) md5_expected, 16))
+            if(memcmp(digest, (const unsigned char *) md5_expected, 16)) {
+		if (signame != norm_signame)
+		    free(norm_signame);
                 return 0;
+	    }
         }
 
-        cli_dbgmsg("Ignoring signature %s\n", signame);
+        cli_dbgmsg("Ignoring signature %s\n", norm_signame);
+	if (signame != norm_signame)
+	    free(norm_signame);
         return 1;
     }
 
+    if (signame != norm_signame)
+	free(norm_signame);
     return 0;
 }
 
@@ -1580,41 +1639,13 @@ static inline int init_tdb(struct cli_lsig_tdb *tdb, struct cl_engine *engine, c
  * NOTE: Maximum of 64(see MAX_LDB_SUBSIGS) subsignatures (last would be token 66)
  */
 #define LDB_TOKENS 67
-static int ldb_tokenize(char *buffer, const char **tokens)
-{
-    const size_t token_count = LDB_TOKENS + 1;
-    size_t tokens_found, i;
-    int within_pcre = 0;
-
-    for(tokens_found = 0; tokens_found < token_count; ) {
-        tokens[tokens_found++] = buffer;
-
-        while (*buffer != '\0') {
-            if (!within_pcre && (*buffer == ';'))
-                break;
-            else if ((tokens_found > 2) && (*(buffer-1) != '\\') && (*buffer == '/'))
-                within_pcre = !within_pcre;
-            buffer++;
-        }
-
-        if(*buffer != '\0') {
-            *buffer++ = '\0';
-        } else {
-            i = tokens_found;
-            while(i < token_count)
-                tokens[i++] = NULL;
-            return tokens_found;
-        }
-    }
-    return tokens_found;
-}
-
+#define SUB_TOKENS 4
 static int load_oneldb(char *buffer, int chkpua, struct cl_engine *engine, unsigned int options, const char *dbname, unsigned int line, unsigned int *sigs, unsigned bc_idx, const char *buffer_cpy, int *skip)
 {
-    const char *sig, *virname, *offset, *logic;
+    const char *sig, *virname, *offset, *logic, *sigopts;
     struct cli_ac_lsig **newtable, *lsig;
-    char *tokens[LDB_TOKENS+1], *pt, *lsl, *rsl;
-    int i, subsigs, tokens_count;
+    char *tokens[LDB_TOKENS+1], *subtokens[SUB_TOKENS+1];
+    int i, j, subsigs, tokens_count, subtokens_count;
     unsigned short target = 0;
     struct cli_matcher *root;
     struct cli_lsig_tdb tdb;
@@ -1624,8 +1655,9 @@ static int load_oneldb(char *buffer, int chkpua, struct cl_engine *engine, unsig
 
     UNUSEDPARAM(dbname);
 
-    tokens_count = ldb_tokenize(buffer, (const char **) tokens);
+    tokens_count = cli_ldbtokenize(buffer, ';', LDB_TOKENS + 1, (const char **) tokens, 2);
     if(tokens_count < 4) {
+        cli_errmsg("Invalid or unsupported ldb signature format\n");
         return CL_EMALFDB;
     }
 
@@ -1649,9 +1681,9 @@ static int load_oneldb(char *buffer, int chkpua, struct cl_engine *engine, unsig
 
     subsigs = cli_ac_chklsig(logic, logic + strlen(logic), NULL, NULL, NULL, 1);
     if(subsigs == -1) {
+        cli_errmsg("Invalid or unsupported ldb logic\n");
         return CL_EMALFDB;
     }
-
     subsigs++;
 
 #if !HAVE_PCRE
@@ -1682,8 +1714,8 @@ static int load_oneldb(char *buffer, int chkpua, struct cl_engine *engine, unsig
 
     /* enforce MAX_LDB_SUBSIGS(currently 64) subsig cap */
     if(subsigs > MAX_LDB_SUBSIGS) {
-	cli_errmsg("cli_loadldb: Broken logical expression or too many subsignatures\n");
-	return CL_EMALFDB;
+        cli_errmsg("cli_loadldb: Broken logical expression or too many subsignatures\n");
+        return CL_EMALFDB;
     }
 
     /* TDB */
@@ -1733,52 +1765,48 @@ static int load_oneldb(char *buffer, int chkpua, struct cl_engine *engine, unsig
     tdb.subsigs = subsigs;
 
     for(i = 0; i < subsigs; i++) {
-        subsig_opts = 0;
-
         lsigid[1] = i;
         offset = "*";
-        sig = tokens[3 + i];
 
-        /* check for offset and subsig modifiers */
-        pt = tokens[3 + i];
-        lsl = strchr(tokens[3 + i], '/');
-        rsl = strrchr(tokens[3 + i], '/');
-        while((pt = strchr(pt, ':'))) {
-            /* pcre subsig expression */
-            if((lsl && rsl) && (lsl < pt) && (pt <  rsl)) {
-                pt++;
-                continue;
-            }
+        sigopts = NULL;
+        subsig_opts = 0;
 
-            *pt++ = 0;
-            if(*pt == ':') { /* signature modifiers */
-                *pt++ = 0;
-                while(*pt != '\0') {
-                    switch(*pt) {
-                    case 'i':
-                        subsig_opts |= ACPATT_OPTION_NOCASE;
-                        break;
-                    case 'f':
-                        subsig_opts |= ACPATT_OPTION_FULLWORD;
-                        break;
-                    case 'w':
-                        subsig_opts |= ACPATT_OPTION_WIDE;
-                        break;
-                    case 'a':
-                        subsig_opts |= ACPATT_OPTION_ASCII;
-                        break;
-                    default:
-                        cli_errmsg("cli_loadldb: Signature for %s uses invalid option: %02x\n", virname, *pt);
-                        return CL_EMALFDB;
-                    }
-
-                    pt++;
-                }
-            } else {
-                sig = pt;
-                offset = tokens[3 + i];
-            }
+        subtokens_count = cli_ldbtokenize(tokens[3 + i], ':', SUB_TOKENS + 1, (const char **) subtokens, 0);
+	    if(!subtokens_count) {
+            cli_errmsg("Invalid or unsupported ldb subsignature format\n");
+            return CL_EMALFDB;
         }
+
+	    if((subtokens_count % 2) == 0)
+            offset = subtokens[0];
+
+	    if(subtokens_count == 3)
+            sigopts = subtokens[2];
+        else if(subtokens_count == 4)
+            sigopts = subtokens[3];
+
+        if(sigopts) { /* signature modifiers */
+            for(j = 0; j < strlen(sigopts); j++)
+                switch(sigopts[j]) {
+                case 'i':
+                    subsig_opts |= ACPATT_OPTION_NOCASE;
+                    break;
+                case 'f':
+                    subsig_opts |= ACPATT_OPTION_FULLWORD;
+                    break;
+                case 'w':
+                    subsig_opts |= ACPATT_OPTION_WIDE;
+                    break;
+                case 'a':
+                    subsig_opts |= ACPATT_OPTION_ASCII;
+                    break;
+                default:
+                    cli_errmsg("cli_loadldb: Signature for %s uses invalid option: %02x\n", virname, sigopts[j]);
+                    return CL_EMALFDB;
+                }
+        }
+
+        sig = (subtokens_count % 2) ? subtokens[0] : subtokens[1];
 
         if(subsig_opts)
             ret = cli_sigopts_handler(root, virname, sig, subsig_opts, 0, 0, offset, target, lsigid, options);
@@ -3017,6 +3045,7 @@ static int cli_loadopenioc(FILE *fs, const char *dbname, struct cl_engine *engin
     return rc;
 }
 
+#ifdef HAVE_YARA
 #define YARA_DEBUG 1
 #if (YARA_DEBUG == 2)
 #define cli_yaramsg(...) cli_errmsg(__VA_ARGS__)
@@ -3083,7 +3112,13 @@ static char *parse_yara_hex_string(YR_STRING *string, int *ret)
         case '}':
             break;
         case '[':
-            res[j++] = '{';
+            /* unbounded range check */
+            if ((i+2 < slen-1) && (str[i+1] == '-') && (str[i+2] == ']')) {
+                res[j++] = '*';
+                i += 2;
+            } else {
+                res[j++] = '{';
+            }
             break;
         case ']':
             res[j++] = '}';
@@ -3100,6 +3135,7 @@ static char *parse_yara_hex_string(YR_STRING *string, int *ret)
         if ((ovr = strchr(ovr, '}')))
             *ovr = ']';
         else {
+            free(res);
             if (ret) *ret = CL_EMALFDB;
             return NULL;
         }
@@ -3110,6 +3146,7 @@ static char *parse_yara_hex_string(YR_STRING *string, int *ret)
         if ((ovr = strrchr(res, '{')))
             *ovr = '[';
         else {
+            free(res);
             if (ret) *ret = CL_EMALFDB;
             return NULL;
         }
@@ -3254,18 +3291,37 @@ static void ytable_delete(struct cli_ytable *ytable)
     }
 }
 
-static int yara_subhex_verify(const char *hexstr)
+static int yara_subhex_verify(const char *hexstr, const char *end, size_t *maxsublen)
 {
-    size_t max_sublen = 0;
-    const char *track = hexstr;
-    int in = 0;
+    size_t sublen = 0;
+    const char *track;
+    char in = 0;
+    int hexbyte = 0;
 
-    /* REQUIRES - subpatterns must be at least length 2 */
-    while (*track != '\0' && max_sublen < 4) {
-        switch(*track) {
+    if (hexstr == end) {
+        cli_warnmsg("load_oneyara[verify]: string has empty sequence\n");
+        return CL_EMALFDB;
+    }
+
+    track = hexstr;
+    while (track != end) {
+        switch (*track) {
         case '*':
+            if (sublen <= 2) {
+                if (maxsublen)
+                    *maxsublen = sublen;
+                cli_warnmsg("load_oneyara[verify]: string has unbounded wildcard on single byte subsequence\n");
+                return CL_EMALFDB;
+            }
+            if (maxsublen && (sublen > *maxsublen))
+                *maxsublen = sublen;
+            sublen = 0;
+            break;
         case '?':
-            max_sublen = 0;
+            if (maxsublen && (sublen > *maxsublen))
+                *maxsublen = sublen;
+            hexbyte = !hexbyte;
+            sublen = 0;
             break;
         case '[':
         case '{':
@@ -3273,71 +3329,123 @@ static int yara_subhex_verify(const char *hexstr)
                 cli_warnmsg("load_oneyara[verify]: string has invalid nesting\n");
                 return CL_EMALFDB;
             }
-            in = 1;
+            if (hexbyte) {
+                cli_warnmsg("load_oneyara[verify]: string has invalid hex sequence\n");
+                return CL_EMALFDB;
+            }
+            if (maxsublen && (sublen > *maxsublen))
+                *maxsublen = sublen;
+            sublen = 0;
+            in = *track;
             break;
         case ']':
+            if (in != '[') {
+                cli_warnmsg("load_oneyara[verify]: string has invalid ranged anchored\n");
+                return CL_EMALFDB;
+            }
+            in = 0;
+            break;
         case '}':
-            if (!in) {
-                cli_warnmsg("load_oneyara[verify]: string has invalid sequence close\n");
+            if (in != '{') {
+                cli_warnmsg("load_oneyara[verify]: string has invalid ranged wildcard\n");
                 return CL_EMALFDB;
             }
             in = 0;
             break;
         default:
-            max_sublen++;
+            if (!in) {
+                if ((*track >= 'A' && *track <= 'F') ||
+                    (*track >= 'a' && *track <= 'f') ||
+                    (*track >= '0' && *track <= '9')) {
+
+                    hexbyte = !hexbyte;
+                    sublen++;
+                } else {
+                    cli_warnmsg("load_oneyara[verify]: unknown character: %x\n", *track);
+                    return CL_EMALFDB;
+                }
+            }
             break;
         }
 
         track++;
     }
+
     if (in) {
-        cli_warnmsg("load_oneyara[verify]: string has unterminated sequence\n");
+        cli_warnmsg("load_oneyara[verify]: string has unterminated wildcard sequence\n");
         return CL_EMALFDB;
     }
-    if (max_sublen < 4) {
-        cli_warnmsg("load_oneyara[verify]: cannot find a static subpattern of length 2\n");
+    if (hexbyte) {
+        cli_warnmsg("load_oneyara[verify]: string has invalid hex sequence\n");
         return CL_EMALFDB;
     }
+    if (maxsublen && (sublen > *maxsublen))
+        *maxsublen = sublen;
 
     return CL_SUCCESS;
 }
 
-static int yara_altstr_verify(const char *hexstr)
+static int yara_altstr_verify(const char *hexstr, int lvl, const char **end)
 {
-    const char *end;
-    int i, range, lvl = 0;
+    const char *track, *sub;
+    int ret, range;
+    size_t offset;
 
-    for (i = 0; i < strlen(hexstr); i++) {
-        if (hexstr[i] == '(') {
-            lvl++;
-            if (lvl > ACPATT_ALTN_MAXNEST) {
-                cli_warnmsg("load_oneyara[verify]: string has unsupported alternating sequence (nest level)\n");
-                return CL_EMALFDB;
-            }
-        } else if (hexstr[i] == ')') {
-            if (!lvl) {
-                break;
-            }
-        } else if (hexstr[i] == '{') { /* clamav converted '[' */
-            end = &hexstr[i];
-            while (*end != '}' && *end != '-' && *end != '\0')
-                end++;
+    if (lvl > ACPATT_ALTN_MAXNEST) {
+        cli_warnmsg("load_oneyara[verify]: string has unsupported alternate sequence (nest level)\n");
+        return CL_EMALFDB;
+    }
 
-            switch (*end) {
-            case '\0':
+    track = hexstr;
+    while ((offset = strcspn(track, "(|){}"))) {
+        sub = track + offset;
+        if (*sub == '\0') {
+            cli_warnmsg("load_oneyara[verify]: string has unterminated alternate sequence\n");
+            return CL_EMALFDB;
+        }
+
+        /* verify subhex */
+        if ((ret = yara_subhex_verify(track, sub, NULL)) != CL_SUCCESS)
+            return ret;
+
+        track = sub;
+        if (*track == '(') {
+            if ((ret = yara_altstr_verify(track+1, lvl+1, &sub)) != CL_SUCCESS)
+                return ret;
+        } else if (*track == ')') {
+            if (end)
+                *end = track;
+            break;
+        } else if (*track == '{') { /* clamav converted '[' */
+            if ((offset = strcspn(track, "}-"))) {
+                sub = track + offset;
+                switch (*sub) {
+                case '\0':
+                    cli_warnmsg("load_oneyara[verify]: string has unsupported alternating sequence (unterminated ranged wildcard)\n");
+                    return CL_EMALFDB;
+                case '-':
+                    cli_warnmsg("load_oneyara[verify]: string has unsupported alternating sequence (variable ranged wildcard)\n");
+                    return CL_EMALFDB;
+                case '}':
+                    if (sscanf(track, "{%3d}", &range) != 1) {
+                        cli_warnmsg("load_oneyara[verify]: string has unsupported alternating sequence (invalid wildcard)\n");
+                        return CL_EMALFDB;
+                    }
+                    if (range >= 128) {
+                        cli_warnmsg("load_oneyara[verify]: string has unsupported alternating sequence (128+ ranged wildcard)\n");
+                        return CL_EMALFDB;
+                    }
+                }
+            } else {
                 cli_warnmsg("load_oneyara[verify]: string has unsupported alternating sequence (unterminated ranged wildcard)\n");
                 return CL_EMALFDB;
-            case '-':
-                cli_warnmsg("load_oneyara[verify]: string has unsupported alternating sequence (variable ranged wildcard)\n");
-                return CL_EMALFDB;
-            case '}':
-                sscanf(&hexstr[i], "{%d}", &range);
-                if (range >= 128) {
-                    cli_warnmsg("load_oneyara[verify]: string has unsupported alternating sequence (128+ ranged wildcard)\n");
-                    return CL_EMALFDB;
-                }
             }
+        } else if (*track != '|') {
+            cli_warnmsg("load_oneyara[verify]: string has unsupported alternating sequence (invalid sequence)\n");
+            return CL_EMALFDB;
         }
+
+        track = ++sub;
     }
 
     return CL_SUCCESS;
@@ -3347,7 +3455,8 @@ static int yara_altstr_verify(const char *hexstr)
 static int yara_hexstr_verify(YR_STRING *string, const char *hexstr)
 {
     int ret = CL_SUCCESS;
-    char *hexcpy, *track, *alt;
+    const char *track, *end;
+    size_t maxsublen = 0, length;
 
     /* Quick Check 1: NULL String */
     if (!hexstr || !string) {
@@ -3362,35 +3471,33 @@ static int yara_hexstr_verify(YR_STRING *string, const char *hexstr)
     }
 
     /* Long Check: No Alternating Strings, Subhex must be Length 2 */
-    hexcpy = cli_strdup(hexstr);
-    if (!hexcpy)
-        return CL_EMEM;
-    track = hexcpy;
-    while ((alt = strchr(track, '('))) {
-        char *start = alt+1;
-        *alt = '\0';
-
-        alt = strchr(start, ')');
-        *alt = '\0';
-
-        ret = yara_subhex_verify(track);
-        if (ret != CL_SUCCESS) {
-            free(hexcpy);
-            return ret;
+    track = hexstr;
+    while ((end = strchr(track, '('))) {
+        if (track != end) {
+            if ((ret = yara_subhex_verify(track, end, &maxsublen)) != CL_SUCCESS)
+                return ret;
         }
 
-        ret = yara_altstr_verify(start);
-        if (ret != CL_SUCCESS) {
-            free(hexcpy);
+        track = end + 1;
+        if ((ret = yara_altstr_verify(track, 0, &end)) != CL_SUCCESS)
             return ret;
-        }
 
-        track = alt+1;
+        track = end + 1;
     }
-    ret = yara_subhex_verify(track);
-    free(hexcpy);
 
-    return ret;
+    /* Check: Suffix (or Non-Alt Hex) */
+    length = strlen(track);
+    if (length > 0)
+        if ((ret = yara_subhex_verify(track, track + length, &maxsublen)) != CL_SUCCESS)
+            return ret;
+
+    /* REQUIRES - Subpatterns must be at least length 2 */
+    if (maxsublen < 2) {
+        cli_warnmsg("load_oneyara[verify]: cannot find a static subpattern of length 2\n");
+        return CL_EMALFDB;
+    }
+
+    return CL_SUCCESS;
 }
 
 static unsigned int yara_total, yara_loaded, yara_malform, yara_empty, yara_complex;
@@ -3414,6 +3521,7 @@ static int load_oneyara(YR_RULE *rule, int chkpua, struct cl_engine *engine, uns
     char *logic = NULL, *target_str = NULL;
     uint8_t has_short_string;
     char *exp_op = "|";
+    char *newident = NULL;
 
     cli_yaramsg("load_oneyara: attempting to load %s\n", rule->identifier);
 
@@ -3430,8 +3538,17 @@ static int load_oneyara(YR_RULE *rule, int chkpua, struct cl_engine *engine, uns
         return CL_SUCCESS;
     }
 
-    if(engine->cb_sigload && engine->cb_sigload("yara", rule->identifier, ~options & CL_DB_OFFICIAL, engine->cb_sigload_ctx)) {
-        cli_dbgmsg("cli_loadyara: skipping %s due to callback\n", rule->identifier);
+    newident = cli_malloc(strlen(rule->identifier) + 5 + 1);
+    if(!newident) {
+        cli_errmsg("cli_loadyara(): newident == NULL\n");
+        return CL_EMEM;
+    }
+
+    snprintf(newident, strlen(rule->identifier) + 5 + 1, "YARA.%s", rule->identifier);
+
+    if(engine->cb_sigload && engine->cb_sigload("yara", newident, ~options & CL_DB_OFFICIAL, engine->cb_sigload_ctx)) {
+        cli_dbgmsg("cli_loadyara: skipping %s due to callback\n", newident);
+        free(newident);
         (*sigs)--;
         return CL_SUCCESS;
     }
@@ -3456,11 +3573,12 @@ static int load_oneyara(YR_RULE *rule, int chkpua, struct cl_engine *engine, uns
 
     if (RULE_IS_NULL(rule) || ((rule->g_flags) & RULE_GFLAGS_REQUIRE_EXECUTABLE)) {
 
-        cli_warnmsg("load_oneyara: skipping %s due to unsupported rule gflags\n", rule->identifier);
+        cli_warnmsg("load_oneyara: skipping %s due to unsupported rule gflags\n", newident);
 
         cli_yaramsg("RULE_IS_NULL                   %s\n", RULE_IS_NULL(rule) ? "yes" : "no");
         cli_yaramsg("RULE_GFLAGS_REQUIRE_EXECUTABLE %s\n", ((rule->g_flags) & RULE_GFLAGS_REQUIRE_EXECUTABLE) ? "yes" : "no");
 
+        free(newident);
         (*sigs)--;
         return CL_SUCCESS;
     }
@@ -3481,9 +3599,10 @@ static int load_oneyara(YR_RULE *rule, int chkpua, struct cl_engine *engine, uns
     */
 #endif
 
-    if(engine->cb_sigload && engine->cb_sigload("yara", rule->identifier, ~options & CL_DB_OFFICIAL, engine->cb_sigload_ctx)) {
-        cli_dbgmsg("load_oneyara: skipping %s due to callback\n", rule->identifier);
+    if(engine->cb_sigload && engine->cb_sigload("yara", newident, ~options & CL_DB_OFFICIAL, engine->cb_sigload_ctx)) {
+        cli_dbgmsg("load_oneyara: skipping %s due to callback\n", newident);
         (*sigs)--;
+        free(newident);
         return CL_SUCCESS;
     }
 
@@ -3494,7 +3613,7 @@ static int load_oneyara(YR_RULE *rule, int chkpua, struct cl_engine *engine, uns
 
         /* string type handler */
         if (STRING_IS_NULL(string)) {
-            cli_warnmsg("load_oneyara: skipping NULL string %s\n", string->identifier);
+            cli_warnmsg("load_oneyara: skipping NULL string %s\n", newident);
             //str_error++; /* kill the insertion? */
             continue;
 #ifdef YARA_FINISHED
@@ -3545,7 +3664,7 @@ static int load_oneyara(YR_RULE *rule, int chkpua, struct cl_engine *engine, uns
             ytable_add_string(&ytable, substr);
             free(substr);
 #else
-            cli_warnmsg("cli_loadyara: %s uses PCREs but support is disabled\n", rule->identifier);
+            cli_warnmsg("cli_loadyara: %s uses PCREs but support is disabled\n", newident);
             str_error++;
             ret = CL_SUCCESS;
             break;
@@ -3558,7 +3677,7 @@ static int load_oneyara(YR_RULE *rule, int chkpua, struct cl_engine *engine, uns
             size_t totsize = 2*length+1;
 
             if (length < CLI_DEFAULT_AC_MINDEPTH) {
-                cli_warnmsg("load_oneyara: string is too short %s\n", string->identifier);
+                cli_warnmsg("load_oneyara: string is too short %s\n", newident);
                 str_error++;
                 continue;
             }
@@ -3635,7 +3754,7 @@ static int load_oneyara(YR_RULE *rule, int chkpua, struct cl_engine *engine, uns
         if (STRING_IS_REFERENCED(string) || STRING_IS_FAST_HEX_REGEXP(string) || STRING_IS_CHAIN_PART(string) ||
             STRING_IS_CHAIN_TAIL(string) || STRING_FITS_IN_ATOM(string)) {
 
-            cli_warnmsg("load_oneyara: skipping unsupported string %s\n", rule->identifier);
+            cli_warnmsg("load_oneyara: skipping unsupported string %s\n", newident);
 
             cli_yaramsg("STRING_IS_REFERENCED      %s\n", STRING_IS_REFERENCED(string) ? "yes" : "no");
             cli_yaramsg("STRING_IS_FAST_HEX_REGEXP %s\n", STRING_IS_FAST_HEX_REGEXP(string) ? "yes" : "no");
@@ -3669,21 +3788,24 @@ static int load_oneyara(YR_RULE *rule, int chkpua, struct cl_engine *engine, uns
     }
 
     if (str_error > 0) {
-        cli_warnmsg("load_oneyara: clamav cannot support %d input strings, skipping %s\n", str_error, rule->identifier);
+        cli_warnmsg("load_oneyara: clamav cannot support %d input strings, skipping %s\n", str_error, newident);
         yara_malform++;
         ytable_delete(&ytable);
+        free(newident);
         (*sigs)--;
         return ret;
     } else if (ytable.tbl_cnt == 0) {
-        cli_warnmsg("load_oneyara: yara rule contains no supported strings, skipping %s\n", rule->identifier);
+        cli_warnmsg("load_oneyara: yara rule contains no supported strings, skipping %s\n", newident);
         yara_malform++;
         ytable_delete(&ytable);
+        free(newident);
         (*sigs)--;
         return CL_SUCCESS; /* TODO - kill signature instead? */
     } else if (ytable.tbl_cnt > MAX_LDB_SUBSIGS) {
-        cli_warnmsg("load_oneyara: yara rule contains too many subsigs (%d, max: %d), skipping %s\n", ytable.tbl_cnt, MAX_LDB_SUBSIGS, rule->identifier);
+        cli_warnmsg("load_oneyara: yara rule contains too many subsigs (%d, max: %d), skipping %s\n", ytable.tbl_cnt, MAX_LDB_SUBSIGS, newident);
         yara_malform++;
         ytable_delete(&ytable);
+        free(newident);
         (*sigs)--;
         return CL_SUCCESS;
     }
@@ -3725,10 +3847,11 @@ static int load_oneyara(YR_RULE *rule, int chkpua, struct cl_engine *engine, uns
         target_str = cli_strdup(YARATARGET0);
 
     memset(&tdb, 0, sizeof(tdb));
-    if ((ret = init_tdb(&tdb, engine, target_str, rule->identifier)) != CL_SUCCESS) {
+    if ((ret = init_tdb(&tdb, engine, target_str, newident)) != CL_SUCCESS) {
         ytable_delete(&ytable);
         free(logic);
         free(target_str);
+        free(newident);
         (*sigs)--;
         if (ret == CL_BREAK)
             return CL_SUCCESS;
@@ -3745,6 +3868,7 @@ static int load_oneyara(YR_RULE *rule, int chkpua, struct cl_engine *engine, uns
         FREE_TDB(tdb);
         ytable_delete(&ytable);
         free(logic);
+        free(newident);
         return CL_EMEM;
     }
 
@@ -3759,16 +3883,20 @@ static int load_oneyara(YR_RULE *rule, int chkpua, struct cl_engine *engine, uns
             FREE_TDB(tdb);
             ytable_delete(&ytable);
             mpool_free(engine->mempool, lsig);
+            free(newident);
             return CL_EMEM;
         }
     } else {
         if (NULL != (lsig->u.code_start = rule->code_start)) {
             lsig->type = (rule->cl_flags & RULE_OFFSETS) ? CLI_YARA_OFFSET : CLI_YARA_NORMAL;
+            if (RULE_IS_PRIVATE(rule))
+                lsig->flag |= CLI_LSIG_FLAG_PRIVATE;
         } else {
             cli_errmsg("load_oneyara: code start is NULL\n");
             FREE_TDB(tdb);
             ytable_delete(&ytable);
             mpool_free(engine->mempool, lsig);
+            free(newident);
             return CL_EMEM;
         }
     }
@@ -3784,6 +3912,7 @@ static int load_oneyara(YR_RULE *rule, int chkpua, struct cl_engine *engine, uns
         FREE_TDB(tdb);
         ytable_delete(&ytable);
         mpool_free(engine->mempool, lsig);
+        free(newident);
         return CL_EMEM;
     }
 
@@ -3801,13 +3930,14 @@ static int load_oneyara(YR_RULE *rule, int chkpua, struct cl_engine *engine, uns
                     (ytable.table[i]->sigopts & ACPATT_OPTION_WIDE) ? "w" : "",
                     (ytable.table[i]->sigopts & ACPATT_OPTION_ASCII) ? "a" : "");
 
-        if((ret = cli_sigopts_handler(root, rule->identifier, ytable.table[i]->hexstr, ytable.table[i]->sigopts, 0, 0, ytable.table[i]->offset, target, lsigid, options)) != CL_SUCCESS) {
+        if((ret = cli_sigopts_handler(root, newident, ytable.table[i]->hexstr, ytable.table[i]->sigopts, 0, 0, ytable.table[i]->offset, target, lsigid, options)) != CL_SUCCESS) {
             root->ac_lsigs--;
             FREE_TDB(tdb);
             ytable_delete(&ytable);
             mpool_free(engine->mempool, lsig);
 
             yara_malform++;
+            free(newident);
             return ret;
         }
     }
@@ -3815,8 +3945,10 @@ static int load_oneyara(YR_RULE *rule, int chkpua, struct cl_engine *engine, uns
     memcpy(&lsig->tdb, &tdb, sizeof(tdb));
     ytable_delete(&ytable);
 
+    rule->lsigid = root->ac_lsigs - 1;
     yara_loaded++;
-    cli_yaramsg("load_oneyara: successfully loaded %s\n", rule->identifier);
+    cli_yaramsg("load_oneyara: successfully loaded %s\n", newident);
+    free(newident);
     return CL_SUCCESS;
 }
 
@@ -3899,22 +4031,6 @@ void cli_yara_free(struct cl_engine * engine)
     }        
 }
 
-#if 0
-int cli_yara_hash_db_file(char * fname)
-{
-    if (yr_hash_table_lookup(db_table, fname, NULL) == NULL) {
-        cli_errmsg("***** ADDING %s\n", fbname);
-        if ((rc = yr_hash_table_add(db_table, fname, NULL, (void*) 1)) != ERROR_SUCCESS) {
-            cli_errmsg("****** Could not add %s to db_table\n", dbname);
-        }
-    } else {
-        cli_warnmsg("cli_loadyara: db file %s already included\n", dbname);
-        return 1;
-    }
-    return 0;
-}
-#endif
-
 //TODO - pua? dbio?
 static int cli_loadyara(FILE *fs, struct cl_engine *engine, unsigned int *signo, unsigned int options, struct cli_dbio *dbio, const char *filename)
 {
@@ -3928,12 +4044,6 @@ static int cli_loadyara(FILE *fs, struct cl_engine *engine, unsigned int *signo,
 
     if((rc = cli_initroots(engine, options)))
         return rc;
-
-#if 0
-    /* eliminate duplicate files */ 
-    if (cli_yara_hash_db_file(dbname))
-        return CL_SUCCESS;
-#endif
 
     compiler.last_result = ERROR_SUCCESS;
     STAILQ_INIT(&compiler.rule_q);
@@ -3963,15 +4073,22 @@ static int cli_loadyara(FILE *fs, struct cl_engine *engine, unsigned int *signo,
     if (rc > 0) { /* rc = number of errors */
         /* TODO - handle the various errors? */
         cli_errmsg("cli_loadyara: failed to parse rules file %s, error count %i\n", filename, rc);
-        yr_arena_destroy(compiler.sz_arena);
-        yr_arena_destroy(compiler.rules_arena);
-        yr_arena_destroy(compiler.code_arena);
-        yr_arena_destroy(compiler.strings_arena);
-        yr_arena_destroy(compiler.metas_arena);
+        if (compiler.sz_arena != NULL)
+            yr_arena_destroy(compiler.sz_arena);
+        if (compiler.rules_arena != NULL)
+            yr_arena_destroy(compiler.rules_arena);
+        if (compiler.code_arena != NULL)
+            yr_arena_destroy(compiler.code_arena);
+        if (compiler.strings_arena != NULL)
+            yr_arena_destroy(compiler.strings_arena);
+        if (compiler.metas_arena != NULL)
+            yr_arena_destroy(compiler.metas_arena);
         _yr_compiler_pop_file_name(&compiler);
 #ifdef YARA_FINISHED
         return CL_EMALFDB;
 #else
+        if (compiler.last_result == ERROR_INSUFICIENT_MEMORY)
+            return CL_EMEM;
         return CL_SUCCESS;
 #endif
     }
@@ -4024,6 +4141,176 @@ static int cli_loadyara(FILE *fs, struct cl_engine *engine, unsigned int *signo,
 
     return CL_SUCCESS;
 }
+#endif
+
+/*      0            1           2          3
+ * PasswordName;Attributes;PWStorageType;Password
+ */
+#define PWDB_TOKENS 4
+static int cli_loadpwdb(FILE *fs, struct cl_engine *engine, unsigned int options, unsigned int internal, struct cli_dbio *dbio)
+{
+    const char *tokens[PWDB_TOKENS + 1], *passname;
+    char *attribs;
+    char buffer[FILEBUFF];
+    unsigned int line = 0, skip = 0, pwcnt = 0, tokens_count;
+    struct cli_pwdb *new, *ins;
+    cl_pwdb_t container;
+    struct cli_lsig_tdb tdb;
+    int ret = CL_SUCCESS, pwstype;
+
+    while(1) {
+        if(internal){
+            options |= CL_DB_OFFICIAL;
+            /* TODO - read default passwords */
+            return CL_SUCCESS;
+        } else {
+            if(!cli_dbgets(buffer, FILEBUFF, fs, dbio))
+                break;
+            if(buffer[0] == '#')
+                continue;
+            cli_chomp(buffer);
+        }
+        line++;
+        tokens_count = cli_strtokenize(buffer, ';', PWDB_TOKENS, tokens);
+
+        if(tokens_count != PWDB_TOKENS) {
+            ret = CL_EMALFDB;
+            break;
+        }
+
+        passname = tokens[0];
+
+        /* check if password is ignored, note that name is not stored */
+        if (engine->ignored && cli_chkign(engine->ignored, passname, passname)) {
+            skip++;
+            continue;
+        }
+
+        if(engine->cb_sigload && engine->cb_sigload("pwdb", passname, ~options & CL_DB_OFFICIAL, engine->cb_sigload_ctx)) {
+            cli_dbgmsg("cli_loadpwdb: skipping %s due to callback\n", passname);
+            skip++;
+            continue;
+        }
+
+        /* append target type 0 to tdb string if needed */
+        if ((tokens[1][0] == '\0') || (strstr(tokens[1], "Target:") != NULL)) {
+            attribs = cli_strdup(tokens[1]);
+            if(!attribs) {
+                cli_errmsg("cli_loadpwdb: Can't allocate memory for attributes\n");
+                ret = CL_EMEM;
+                break;
+            }
+        } else {
+            size_t attlen = strlen(tokens[1]) + 10;
+            attribs = cli_calloc(attlen, sizeof(char));
+            if(!attribs) {
+                cli_errmsg("cli_loadpwdb: Can't allocate memory for attributes\n");
+                ret = CL_EMEM;
+                break;
+            }
+            snprintf(attribs, attlen, "%s,Target:0", tokens[1]);
+        }
+
+        /* use the tdb to track filetypes and check flevels */
+        memset(&tdb, 0, sizeof(tdb));
+        tdb.mempool = engine->mempool;
+        ret = init_tdb(&tdb, engine, attribs, passname);
+        free(attribs);
+        if(ret != CL_SUCCESS) {
+            skip++;
+            if (ret == CL_BREAK)
+                continue;
+            else
+                break;
+        }
+
+        /* check container type */
+        if (!tdb.container) {
+            container = CLI_PWDB_ANY;
+        } else {
+            switch (*(tdb.container)) {
+            case CL_TYPE_ANY:
+                container = CLI_PWDB_ANY;
+                break;
+            case CL_TYPE_ZIP:
+                container = CLI_PWDB_ZIP;
+                break;
+            case CL_TYPE_RAR:
+                container = CLI_PWDB_RAR;
+                break;
+            default:
+                cli_errmsg("cli_loadpwdb: Invalid conatiner specified to .pwdb signature\n");
+                return CL_EMALFDB;
+            }
+        }
+        FREE_TDB(tdb);
+
+        /* check the PWStorageType */
+        if(!cli_isnumber(tokens[2])) {
+            cli_errmsg("cli_loadpwdb: Invalid value for PWStorageType (third entry)\n");
+            ret = CL_EMALFDB;
+            break;
+        }
+
+        pwstype = atoi(tokens[2]);
+        if((pwstype == 0) || (pwstype == 1)) {
+            new = (struct cli_pwdb *) mpool_calloc(engine->mempool, 1, sizeof(struct cli_pwdb));
+            if(!new) {
+                ret = CL_EMEM;
+                break;
+            }
+
+            /* copy passwd name */
+            new->name = cli_mpool_strdup(engine->mempool, tokens[0]);
+            if (!new->name) {
+                ret = CL_EMEM;
+                mpool_free(engine->mempool, new);
+                break;
+            }
+
+            if(pwstype == 0) { /* cleartext */
+                new->passwd = cli_mpool_strdup(engine->mempool, tokens[3]);
+                new->length = strlen(tokens[3]);
+            } else { /* 1 => hex-encoded */
+                new->passwd = cli_mpool_hex2str(engine->mempool, tokens[3]);
+                new->length = strlen(tokens[3]) / 2;
+            }
+            if(!new->passwd) {
+                cli_errmsg("cli_loadpwdb: Can't decode or add new password entry\n");
+                if(pwstype == 0)
+                    ret = CL_EMEM;
+                else
+                    ret = CL_EMALFDB;
+                mpool_free(engine->mempool, new->name);
+                mpool_free(engine->mempool, new);
+                break;
+            }
+
+            /* add to the engine list, sorted by target type */
+	    new->next = engine->pwdbs[container];
+	    engine->pwdbs[container] = new;
+        } else {
+            cli_dbgmsg("cli_loadpwdb: Unsupported PWStorageType %u\n", pwstype);
+            continue;
+        }
+
+        pwcnt++;
+    }
+
+    /* error reporting */
+    if(ret) {
+        cli_errmsg("Problem processing %s password database at line %u\n", internal ? "built-in" : "external", line);
+        return ret;
+    }
+
+    if(!pwcnt) {
+        cli_errmsg("Empty %s password database\n", internal ? "built-in" : "external");
+        return CL_EMALFDB;
+    }
+
+    cli_dbgmsg("Loaded %u (%u skipped) password entries\n", pwcnt, skip);
+    return CL_SUCCESS;
+}
 
 static int cli_loaddbdir(const char *dirname, struct cl_engine *engine, unsigned int *signo, unsigned int options);
 
@@ -4059,6 +4346,14 @@ int cli_load(const char *filename, struct cl_engine *engine, unsigned int *signo
     else
 	dbname = filename;
 
+#ifdef HAVE_YARA
+    if(options & CL_DB_YARA_ONLY) {
+        if(cli_strbcasestr(dbname, ".yar") || cli_strbcasestr(dbname, ".yara"))
+	    ret = cli_loadyara(fs, engine, signo, options, dbio, filename);
+	else
+	    skipped = 1;
+    } else
+#endif
     if(cli_strbcasestr(dbname, ".db")) {
 	ret = cli_loaddb(fs, engine, signo, options, dbio, dbname);
 
@@ -4155,11 +4450,18 @@ int cli_load(const char *filename, struct cl_engine *engine, unsigned int *signo
 	ret = cli_loadmscat(fs, dbname, engine, options, dbio);
     } else if(cli_strbcasestr(dbname, ".ioc")) {
 	ret = cli_loadopenioc(fs, dbname, engine, options);
+#ifdef HAVE_YARA
     } else if(cli_strbcasestr(dbname, ".yar") || cli_strbcasestr(dbname, ".yara")) {
-        ret = cli_loadyara(fs, engine, signo, options, dbio, filename);
+	if(!(options & CL_DB_YARA_EXCLUDE))
+	    ret = cli_loadyara(fs, engine, signo, options, dbio, filename);
+	else
+	    skipped = 1;
+#endif
+    } else if(cli_strbcasestr(dbname, ".pwdb")) {
+        ret = cli_loadpwdb(fs, engine, options, 0, dbio);
     } else {
-	cli_dbgmsg("cli_load: unknown extension - assuming old database format\n");
-	ret = cli_loaddb(fs, engine, signo, options, dbio, dbname);
+	cli_warnmsg("cli_load: unknown extension - skipping %s\n", filename);
+	skipped = 1;
     } 
 
     if(ret) {
@@ -4628,6 +4930,22 @@ int cl_statchkdir(const struct cl_stat *dbstat)
     return CL_SUCCESS;
 }
 
+void cli_pwdb_list_free(struct cl_engine *engine, struct cli_pwdb *pwdb)
+{
+    struct cli_pwdb *thiz, *that;
+
+    thiz = pwdb;
+    while (thiz) {
+	that = thiz->next;
+
+	mpool_free(engine->mempool, thiz->name);
+	mpool_free(engine->mempool, thiz->passwd);
+	mpool_free(engine->mempool, thiz);
+
+	thiz = that;
+    }
+}
+
 int cl_statfree(struct cl_stat *dbstat)
 {
 
@@ -4784,6 +5102,13 @@ int cl_engine_free(struct cl_engine *engine)
         mpool_free(engine->mempool, engine->dconf);
     }
 
+    if(engine->pwdbs) {
+        for(i = 0; i < CLI_PWDB_COUNT; i++)
+            if(engine->pwdbs[i])
+                cli_pwdb_list_free(engine, engine->pwdbs[i]);
+	mpool_free(engine->mempool, engine->pwdbs);
+    }
+
     if(engine->pua_cats)
 	mpool_free(engine->mempool, engine->pua_cats);
 
@@ -4827,8 +5152,9 @@ int cl_engine_free(struct cl_engine *engine)
     if(engine->mempool) mpool_destroy(engine->mempool);
 #endif
 
- 
+#ifdef HAVE_YARA
     cli_yara_free(engine);
+#endif
 
     free(engine);
     return CL_SUCCESS;
@@ -4842,7 +5168,7 @@ int cl_engine_compile(struct cl_engine *engine)
 
     if(!engine)
 	return CL_ENULLARG;
-
+#ifdef HAVE_YARA
     /* Free YARA hash tables - only needed for parse and load */
     if (engine->yara_global != NULL) {
         if (engine->yara_global->rules_table)
@@ -4851,9 +5177,15 @@ int cl_engine_compile(struct cl_engine *engine)
             yr_hash_table_destroy(engine->yara_global->objects_table, NULL);
         engine->yara_global->rules_table = engine->yara_global->objects_table = NULL;
     }
+#endif
 
     if(!engine->ftypes)
 	if((ret = cli_loadftm(NULL, engine, 0, 1, NULL)))
+	    return ret;
+
+    /* handle default passwords */
+    if(!engine->pwdbs[0] && !engine->pwdbs[1] && !engine->pwdbs[2])
+	if((ret = cli_loadpwdb(NULL, engine, 0, 1, NULL)))
 	    return ret;
 
     for(i = 0; i < CLI_MTARGETS; i++) {

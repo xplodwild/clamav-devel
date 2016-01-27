@@ -1,6 +1,6 @@
 /*
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2007-2013 Sourcefire, Inc.
- *  Copyright (C) 2014 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *
  *  Authors: Tomasz Kojm
  *
@@ -85,6 +85,8 @@ typedef enum {
     CL_TYPE_OOXML_PPT,
     CL_TYPE_OOXML_XL,
     CL_TYPE_INTERNAL,
+    CL_TYPE_HWP3,
+    CL_TYPE_OOXML_HWP,
 
     /* Section for partition types */
     CL_TYPE_PART_ANY, /* unknown partition type */
@@ -110,6 +112,10 @@ typedef enum {
     CL_TYPE_XDP,
     CL_TYPE_XML_WORD,
     CL_TYPE_XML_XL,
+    CL_TYPE_XML_HWP,
+    CL_TYPE_HWPOLE2,
+
+    CL_TYPE_OTHER, /* on-the-fly, used for target 14 (OTHER) */
     CL_TYPE_IGNORED /* please don't add anything below */
 } cli_file_t;
 

@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2014 Cisco Systems, Inc.
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2007 - 2013 Sourcefire, Inc.
  *  Copyright (C) 2002 - 2007 Tomasz Kojm <tkojm@clamav.net>
  *  CDIFF code (C) 2006 Sensory Networks, Inc.
@@ -43,6 +43,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/wait.h>
+#else
+#include "w32_stat.h"
 #endif
 #include <dirent.h>
 #include <ctype.h>
@@ -66,6 +68,7 @@
 #include "libclamav/str.h"
 #include "libclamav/ole2_extract.h"
 #include "libclamav/htmlnorm.h"
+#include "libclamav/textnorm.h"
 #include "libclamav/default.h"
 #include "libclamav/fmap.h"
 #include "libclamav/readdb.h"
@@ -220,6 +223,79 @@ static int htmlnorm(const struct optstruct *opts)
 	
     close(fd);
 
+    return 0;
+}
+
+static int asciinorm(const struct optstruct *opts)
+{
+    const char *fname;
+    unsigned char *norm_buff;
+    struct text_norm_state state;
+    size_t map_off;
+    fmap_t *map; 
+    int fd, ofd;
+
+    fname = optget(opts, "ascii-normalise")->strarg;
+    fd = open(fname, O_RDONLY);
+
+    if (fd == -1) {
+	mprintf("!asciinorm: Can't open file %s\n", fname);
+	return -1;
+    }
+
+    if(!(norm_buff = malloc(ASCII_FILE_BUFF_LENGTH))) {
+	mprintf("!asciinorm: Can't allocate memory\n");
+	close(fd);
+	return -1;
+    }
+
+    if (!(map = fmap(fd, 0, 0))) {
+	mprintf("!fmap: Could not map fd %d\n", fd);
+	close(fd);
+	free(norm_buff);
+	return -1;
+    }
+
+    if (map->len > MAX_ASCII_FILE_SIZE) {
+	mprintf("!asciinorm: File size of %zu too large\n", map->len);
+	close(fd);
+	free(norm_buff);
+	funmap(map);
+	return -1;
+    }
+
+    ofd = open("./normalised_text", O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    if (ofd == -1) {
+	mprintf("!asciinorm: Can't open file ./normalised_text\n");
+	close(fd);
+	free(norm_buff);
+	funmap(map);
+	return -1;
+    }
+
+    text_normalize_init(&state, norm_buff, ASCII_FILE_BUFF_LENGTH);
+
+    map_off = 0;
+    while(map_off != map->len) {
+	    size_t written;
+	    if (!(written = text_normalize_map(&state, map, map_off))) break;
+	    map_off += written;
+ 
+	    if (write(ofd, norm_buff, state.out_pos) == -1) {
+		    mprintf("!asciinorm: Can't write to file ./normalised_text\n");
+		    close(fd);
+		    close(ofd);
+		    free(norm_buff);
+		    funmap(map);
+		    return -1;
+	    }
+	    text_normalize_reset(&state);
+    }
+
+    close(fd);
+    close(ofd);
+    free(norm_buff);
+    funmap(map);
     return 0;
 }
 
@@ -532,6 +608,10 @@ static int script2cdiff(const char *script, const char *builder, const struct op
     osize = (unsigned int) sb.st_size;
 
     cdiff = strdup(script);
+    if (NULL == cdiff) {
+       mprintf("!script2cdiff: Unable to allocate memory for file name\n");
+       return -1;
+    }
     pt = strstr(cdiff, ".script");
     if(!pt) {
 	mprintf("!script2cdiff: Incorrect file name (no .script extension)\n");
@@ -2107,13 +2187,32 @@ static char *decodehexstr(const char *hex, unsigned int *dlen)
     return decoded;
 }
 
+inline static char *get_paren_end(char *hexstr)
+{
+    char *pt;
+    int level = 0;
+
+    pt = hexstr;
+    while(*pt != '\0') {
+	if(*pt == '(') {
+	    level++;
+	} else if(*pt == ')') {
+	    if(!level)
+		return pt;
+	    level--;
+	}
+	pt++;
+    }
+    return NULL;
+}
+
 static char *decodehexspecial(const char *hex, unsigned int *dlen)
 {
-	char *pt, *start, *hexcpy, *decoded, *h, *c;
-	unsigned int i, len = 0, hlen, negative, altnum, alttype;
+	char *pt, *start, *hexcpy, *decoded, *h, *e, *c, op, lop;
+	unsigned int i, len = 0, hlen, negative;
+	int level;
 	char *buff;
 
-    
     hexcpy = NULL;
     buff = NULL;
 
@@ -2159,7 +2258,7 @@ static char *decodehexspecial(const char *hex, unsigned int *dlen)
 	    len += hlen;
 	    free(decoded);
 
-	    if(!(start = strchr(pt, ')'))) {
+	    if(!(start = get_paren_end(pt))) {
 		mprintf("!decodehexspecial: Missing closing parethesis\n");
 		free(hexcpy);
 		free(buff);
@@ -2202,61 +2301,109 @@ static char *decodehexspecial(const char *hex, unsigned int *dlen)
 			len += sprintf(buff + len, "{LINE_MARKER_LEFT}");
 		    continue;
 		}
+	    } else if(!strcmp(pt, "W")) {
+		if(!*start) {
+		    if(negative)
+			len += sprintf(buff + len, "{NOT_WORD_MARKER_RIGHT}");
+		    else
+			len += sprintf(buff + len, "{WORD_MARKER_RIGHT}");
+		    continue;
+		} else if(pt - 1 == hexcpy) {
+		    if(negative)
+			len += sprintf(buff + len, "{NOT_WORD_MARKER_LEFT}");
+		    else
+			len += sprintf(buff + len, "{WORD_MARKER_LEFT}");
+		    continue;
+		}
 	    } else {
-		altnum = 0;
-		for(i = 0; i < strlen(pt); i++)
-		    if(pt[i] == '|')
-			altnum++;
-
-		if(!altnum) {
+		if(!strlen(pt)) {
 		    mprintf("!decodehexspecial: Empty block\n");
 		    free(hexcpy);
 		    free(buff);
 		    return NULL;
 		}
-		altnum++;
 
-		if(3 * altnum - 1 == (uint16_t) strlen(pt)) {
-		    alttype = 1; /* char */
-		    if(negative)
-			len += sprintf(buff + len, "{EXCLUDING_CHAR_ALTERNATIVE:");
-		    else
-			len += sprintf(buff + len, "{CHAR_ALTERNATIVE:");
-		} else {
-		    alttype = 2; /* str */
-		    if(negative)
-			len += sprintf(buff + len, "{EXCLUDING_STRING_ALTERNATIVE:");
-		    else
-			len += sprintf(buff + len, "{STRING_ALTERNATIVE:");
-		}
+		/* TODO: analyze string alternative for typing */
+		if(negative)
+		    len += sprintf(buff + len, "{EXCLUDING_STRING_ALTERNATIVE:");
+		else
+		    len += sprintf(buff + len, "{STRING_ALTERNATIVE:");
 
-		for(i = 0; i < altnum; i++) {
-		    if(!(h = cli_strtok(pt, i, "|"))) {
+		level = 0;
+		h = e = pt;
+		op = '\0';
+		while((level >= 0) && (e = strpbrk(h, "()|"))) {
+		    lop = op;
+		    op = *e;
+
+		    *e++ = 0;
+		    if(op != '(' && lop != ')' && !strlen(h)) {
+			mprintf("!decodehexspecial: Empty string alternative block\n");
 			free(hexcpy);
 			free(buff);
 			return NULL;
 		    }
 
+		    //mprintf("decodehexspecial: %s\n", h);
 		    if(!(c = cli_hex2str(h))) {
-			free(h);
+			mprintf("!Decoding failed (3): %s\n", h);
 			free(hexcpy);
 			free(buff);
 			return NULL;
 		    }
+		    memcpy(&buff[len], c, strlen(h) / 2);
+		    len += strlen(h) / 2;
+		    free(c);
 
-		    if(alttype == 1) {
-			buff[len++] = *c;
-		    } else {
-			memcpy(&buff[len], c, strlen(h) / 2);
-			len += strlen(h) / 2;
-		    }
-		    if(i + 1 != altnum)
+		    switch(op) {
+		    case '(':
+			level++;
+			negative = 0;
+			if(e >= pt + 2) {
+			    if(e[-2] == '!') {
+				negative = 1;
+				e[-2] = 0;
+			    }
+			}
+
+			if(negative)
+			    len += sprintf(buff + len, "{EXCLUDING_STRING_ALTERNATIVE:");
+			else
+			    len += sprintf(buff + len, "{STRING_ALTERNATIVE:");
+
+			break;
+		    case ')':
+			level--;
+			buff[len++] = '}';
+
+			break;
+		    case '|':
 			buff[len++] = '|';
 
-		    free(h);
-		    free(c);	
+			break;
+		    default:
+			;
+		    }
+
+		    h = e;
 		}
+		if(!(c = cli_hex2str(h))) {
+		    mprintf("!Decoding failed (4): %s\n", h);
+		    free(hexcpy);
+		    free(buff);
+		    return NULL;
+		}
+		memcpy(&buff[len], c, strlen(h) / 2);
+		len += strlen(h) / 2;
+		free(c);
+
 		buff[len++] = '}';
+		if(level != 0) {
+		    mprintf("!decodehexspecial: Invalid string alternative nesting\n");
+		    free(hexcpy);
+		    free(buff);
+		    return NULL;
+		}
 	    }
 	} while((pt = strchr(start, '(')));
 
@@ -2319,6 +2466,7 @@ static int decodehex(const char *hexsig)
 	regex = cli_calloc(rlen+1, sizeof(char));
 	if (!regex) {
 	    mprintf("!cannot allocate memory for regex expression\n");
+	    free(trigger);
 	    return -1;
 	}
 	strncpy(regex, hexsig+tlen+1, rlen);
@@ -2329,6 +2477,8 @@ static int decodehex(const char *hexsig)
 	    cflags = cli_calloc(clen+1, sizeof(char));
 	    if (!cflags) {
 		mprintf("!cannot allocate memory for compile flags\n");
+		free(trigger);
+		free(regex);
 		return -1;
 	    }
 	    strncpy(cflags, hexsig+tlen+rlen+2, clen);
@@ -2499,11 +2649,167 @@ static int decodehex(const char *hexsig)
     return 0;
 }
 
+static int decodesigmod(const char *sigmod)
+{
+	int i;
+
+    for(i = 0; i < strlen(sigmod); i++) {
+	mprintf(" ");
+
+	switch(sigmod[i]) {
+	case 'i':
+	    mprintf("NOCASE");
+	    break;
+	case 'f':
+	    mprintf("FULLWORD");
+	    break;
+	case 'w':
+	    mprintf("WIDE");
+	    break;
+	case 'a':
+	    mprintf("ASCII");
+	    break;
+	default:
+	    mprintf("UNKNOWN");
+	    return -1;
+	}
+    }
+
+    mprintf("\n");
+    return 0;
+}
+
+static int decodecdb(const char **tokens)
+{
+
+	char *pt = NULL;
+	int sz = 0;
+	char *range[2];
+
+	if (!tokens)
+		return -1;
+
+	mprintf("VIRUS NAME: %s\n", tokens[0]);
+	mprintf("CONTAINER TYPE: %s\n", (strcmp(tokens[1], "*") ? tokens[1] : "ANY"));
+	mprintf("CONTAINER SIZE: ");
+	if (!cli_isnumber(tokens[2])) {
+		if (!strcmp(tokens[2], "*")) {
+			mprintf("ANY\n");
+
+		} else if (strchr(tokens[2], '-')) {
+			sz = cli_strtokenize(tokens[2], '-', 2 + 1, (const char **) range);
+			if(sz != 2 || !cli_isnumber(range[0]) || !cli_isnumber(range[1])) {
+				mprintf("!decodesig: Invalid container size range\n");
+				return -1;
+			}
+			mprintf("WITHIN RANGE %s to %s\n", range[0], range[1]);
+
+		} else {
+			mprintf("!decodesig: Invalid container size\n");
+			return -1;
+		}
+	} else {
+		mprintf("%s\n", tokens[2]);
+	}
+	mprintf("FILENAME REGEX: %s\n", tokens[3]);
+	mprintf("COMPRESSED FILESIZE: ");
+	if (!cli_isnumber(tokens[4])) {
+		if (!strcmp(tokens[4], "*")) {
+			mprintf("ANY\n");
+
+		} else if (strchr(tokens[4], '-')) {
+			sz = cli_strtokenize(tokens[4], '-', 2 + 1, (const char **) range);
+			if(sz != 2 || !cli_isnumber(range[0]) || !cli_isnumber(range[1])) {
+				mprintf("!decodesig: Invalid container size range\n");
+				return -1;
+			}
+			mprintf("WITHIN RANGE %s to %s\n", range[0], range[1]);	
+
+		} else {
+			mprintf("!decodesig: Invalid compressed filesize\n");
+			return -1;
+		}
+	} else {
+		mprintf("%s\n", tokens[4]);
+	}
+	mprintf("UNCOMPRESSED FILESIZE: ");
+	if (!cli_isnumber(tokens[5])) {
+		if (!strcmp(tokens[5], "*")) {
+			mprintf("ANY\n");
+
+		} else if (strchr(tokens[5], '-')) {
+			sz = cli_strtokenize(tokens[5], '-', 2 + 1, (const char **) range);
+			if(sz != 2 || !cli_isnumber(range[0]) || !cli_isnumber(range[1])) {
+				mprintf("!decodesig: Invalid container size range\n");
+				return -1;
+			}
+			mprintf("WITHIN RANGE %s to %s\n", range[0], range[1]);
+
+		} else {
+			mprintf("!decodesig: Invalid uncompressed filesize\n");
+			return -1;
+		}
+	} else {
+		mprintf("%s\n", tokens[5]);
+	}
+
+	mprintf("ENCRYPTION: "); 
+	if (!cli_isnumber(tokens[6])) {
+		if (!strcmp(tokens[6], "*")) {
+			mprintf("IGNORED\n");
+		} else {
+			mprintf("!decodesig: Invalid encryption flag\n");
+			return -1;
+		}
+	} else {
+		mprintf("%s\n", (atoi(tokens[6]) ? "YES" : "NO"));
+	}
+	
+	mprintf("FILE POSITION: ");
+	if (!cli_isnumber(tokens[7])) {
+		if (!strcmp(tokens[7], "*")) {
+			mprintf("ANY\n");
+
+		} else if (strchr(tokens[7], '-')) {
+			sz = cli_strtokenize(tokens[7], '-', 2 + 1, (const char **) range);
+			if(sz != 2 || !cli_isnumber(range[0]) || !cli_isnumber(range[1])) {
+				mprintf("!decodesig: Invalid container size range\n");
+				return -1;
+			}
+			mprintf("WITHIN RANGE %s to %s\n", range[0], range[1]);	
+
+		} else {
+			mprintf("!decodesig: Invalid file position\n");
+			return -1;
+		}
+	} else {
+		mprintf("%s\n", tokens[7]);
+	}
+
+	if (!strcmp(tokens[1], "CL_TYPE_ZIP") || !strcmp(tokens[1], "CL_TYPE_RAR")) {
+		if (!strcmp(tokens[8], "*")) {
+			mprintf("CRC SUM: ANY\n");
+		} else {
+		
+			errno = 0;
+			sz = (int) strtol(tokens[8], NULL, 16);
+			if (!sz && errno) {
+				mprintf("!decodesig: Invalid cyclic redundancy check sum\n");
+				return -1;
+			} else {
+				mprintf("CRC SUM: %d\n", sz);
+			}
+		}
+	}
+
+	return 0;
+}
+
 static int decodesig(char *sig, int fd)
 {
 	char *pt;
-	const char *tokens[68];
-	int tokens_count, subsigs, i, bc = 0;
+	char *tokens[68], *subtokens[4], *subhex;
+	int tokens_count, subtokens_count, subsigs, i, bc = 0;
 
     if(*sig == '[') {
 	if(!(pt = strchr(sig, ']'))) {
@@ -2514,7 +2820,7 @@ static int decodesig(char *sig, int fd)
     }
 
     if(strchr(sig, ';')) { /* lsig */
-        tokens_count = cli_strtokenize(sig, ';', 67 + 1, (const char **) tokens);
+	    tokens_count = cli_ldbtokenize(sig, ';', 67 + 1, (const char **) tokens, 2);
 	if(tokens_count < 4) {
 	    mprintf("!decodesig: Invalid or not supported signature format\n");
 	    return -1;
@@ -2543,22 +2849,43 @@ static int decodesig(char *sig, int fd)
 		mprintf(" * BYTECODE SUBSIG\n");
 	    else
 		mprintf(" * SUBSIG ID %d\n", i);
-	    if((pt = strchr(tokens[3 + i], ':'))) {
-		*pt++ = 0;
-		mprintf(" +-> OFFSET: %s\n", tokens[3 + i]);
-	    } else {
-		mprintf(" +-> OFFSET: ANY\n");
+
+	    subtokens_count = cli_ldbtokenize(tokens[3 + i], ':', 4, (const char **) subtokens, 0);
+	    if(!subtokens_count) {
+		mprintf("!decodesig: Invalid or not supported subsignature format\n");
+		return -1;
 	    }
+	    if((subtokens_count % 2) == 0)
+		mprintf(" +-> OFFSET: %s\n", subtokens[0]);
+	    else
+		mprintf(" +-> OFFSET: ANY\n");
+
+	    if(subtokens_count == 3) {
+		mprintf(" +-> SIGMOD:");
+		decodesigmod(subtokens[2]);
+	    } else if(subtokens_count == 4) {
+		mprintf(" +-> SIGMOD:");
+		decodesigmod(subtokens[3]);
+	    } else {
+		mprintf(" +-> SIGMOD: NONE\n");
+	    }
+
+	    subhex = (subtokens_count % 2) ? subtokens[0] : subtokens[1];
 	    if(fd == -1) {
                 mprintf(" +-> DECODED SUBSIGNATURE:\n");
-                decodehex(pt ? pt : tokens[3 + i]);
+                decodehex(subhex);
 	    } else {
 		mprintf(" +-> ");
-		matchsig(pt ? pt : tokens[3 + i], pt ? tokens[3 + i] : NULL, fd);
+		matchsig(subhex, subhex, fd);
 	    }
 	}
     } else if(strchr(sig, ':')) { /* ndb */
-	tokens_count = cli_strtokenize(sig, ':', 6 + 1, tokens);
+	tokens_count = cli_strtokenize(sig, ':', 12 + 1, (const char **) tokens);
+
+	if (tokens_count > 9 && tokens_count < 13) { /* cdb*/
+	    return decodecdb((const char **) tokens);
+	}
+
 	if(tokens_count < 4 || tokens_count > 6) {
 	    mprintf("!decodesig: Invalid or not supported signature format\n");
 	    mprintf("TOKENS COUNT: %u\n", tokens_count);
@@ -2995,7 +3322,7 @@ static void help(void)
     mprintf("\n");
     mprintf("Clam AntiVirus: Signature Tool (sigtool)  %s\n", get_version());
     mprintf("       By The ClamAV Team: http://www.clamav.net/team\n");
-    mprintf("       (C) 2007-2009 Sourcefire, Inc. et al.\n\n");
+    mprintf("       (C) 2007-2015 Cisco Systems, Inc.\n\n");
 
     mprintf("    --help                 -h              show help\n");
     mprintf("    --version              -V              print version number and exit\n");
@@ -3012,6 +3339,7 @@ static void help(void)
     mprintf("                                           or SHA256 sigs for FILES\n");
     mprintf("    --mdb [FILES]                          generate .mdb sigs\n");
     mprintf("    --html-normalise=FILE                  create normalised parts of HTML file\n");
+    mprintf("    --ascii-normalise=FILE                 create normalised text file from ascii source\n");
     mprintf("    --utf16-decode=FILE                    decode UTF16 encoded files\n");
     mprintf("    --info=FILE            -i FILE         print database information\n");
     mprintf("    --build=NAME [cvd] -b NAME             build a CVD file\n");
@@ -3106,6 +3434,8 @@ int main(int argc, char **argv)
 	ret = hashsig(opts, 1, 1);
     else if(optget(opts, "html-normalise")->enabled)
 	ret = htmlnorm(opts);
+    else if(optget(opts, "ascii-normalise")->enabled)
+	ret = asciinorm(opts);
     else if(optget(opts, "utf16-decode")->enabled)
 	ret = utf16decode(opts);
     else if(optget(opts, "build")->enabled)

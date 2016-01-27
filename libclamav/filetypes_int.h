@@ -1,6 +1,7 @@
 /*
  *  Static filetype data for use when daily.ftm is not available.
  *
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2007-2013 Sourcefire, Inc.
  *
  *  Authors: Tomasz Kojm
@@ -187,6 +188,11 @@ static const char *ftypes_int[] = {
   "1:0:3c3f786d6c2076657273696f6e3d22312e3022*3c??3a776f7264446f63756d656e74:Microsoft Word 2003 XML Document:CL_TYPE_ANY:CL_TYPE_XML_WORD:80",
   "1:0:3c3f786d6c2076657273696f6e3d22312e3022*3c576f726b626f6f6b:Microsoft Excel 2003 XML Document:CL_TYPE_ANY:CL_TYPE_XML_XL:80",
   "1:0:3c3f786d6c2076657273696f6e3d22312e3022*3c??3a576f726b626f6f6b:Microsoft Excel 2003 XML Document:CL_TYPE_ANY:CL_TYPE_XML_XL:80",
+  "0:0:49492a00:TIFF Little Endian:CL_TYPE_ANY:CL_TYPE_GRAPHICS:81",
+  "0:0:4d4d:TIFF Big Endian:CL_TYPE_ANY:CL_TYPE_GRAPHICS:81",
+  "0:4:d0cf11e0a1b11ae1:HWP embedded OLE2:CL_TYPE_ANY:CL_TYPE_HWPOLE2",
+  "0:0:48575020446F63756D656E742046696C652056332E3030201A0102030405:HWP 3.x Document:CL_TYPE_ANY:CL_TYPE_HWP3:82",
+  "1:0:efbbbf3c3f786d6c2076657273696f6e3d22312e3022*3c4857504d4c:HWPML Document:CL_TYPE_ANY:CL_TYPE_XML_HWP:82",
   NULL
 };
 

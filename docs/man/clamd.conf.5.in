@@ -577,6 +577,19 @@ WARNING: setting this limit too high may result in severe damage or impact perfo
 .br
 Default: 100
 .TP
+\fBMaxRecHWP3 NUMBER\fR
+This option sets the maximum recursive calls to HWP3 parsing function.
+.br
+HWP3 files using more than this limit will be terminated and alert the user.
+.br
+Scans will be unable to scan any HWP3 attachments if the recursive limit is reached.
+.br
+Negative values are not allowed.
+.br
+WARNING: setting this limit too high may result in severe damage or impact performance.
+.br
+Default: 16
+.TP
 \fBPCREMatchLimit NUMBER\fR
 This option sets the maximum calls to the PCRE match function during an instance of regex matching.
 .br
@@ -642,6 +655,21 @@ Default: disabled
 Files larger than this value will not be scanned in on access.
 .br
 Default: 5M
+.TP
+\fBOnAccessMountPath STRING\fR
+Specifies a mount point (including all files and directories under it), which should be scanned on access. This option can be used multiple times.
+.br
+Default: disabled
+.TP
+\fBOnAccessDisableDDD BOOL\fR
+Disables the dynamic directory determination system which allows for recursively watching include paths.
+.br
+Default: no
+.TP
+\fBOnAccessPrevention BOOL\fR
+Enables fanotify blocking when malicious files are found.
+.br
+Default: disabled
 .TP
 \fBDisableCertCheck BOOL\fR
 Disable authenticode certificate chain verification in PE files.

@@ -1,6 +1,6 @@
 /*
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2007-2013 Sourcefire, Inc.
- *  Copyright (C) 2014 Cisco Systems, Inc
  *  All Rights Reserved.
  *
  *  Authors: Tomasz Kojm
@@ -55,8 +55,10 @@
 #include "perflogging.h"
 #include "bytecode_priv.h"
 #include "bytecode_api_impl.h"
+#ifdef HAVE_YARA
 #include "yara_clam.h"
 #include "yara_exec.h"
+#endif
 
 #ifdef CLI_PERF_LOGGING
 
@@ -763,11 +765,11 @@ static int lsig_eval(cli_ctx *ctx, struct cli_matcher *root, struct cli_ac_data 
     return CL_CLEAN;
 }
 
+#ifdef HAVE_YARA
 static int yara_eval(cli_ctx *ctx, struct cli_matcher *root, struct cli_ac_data *acdata, struct cli_target_info *target_info, const char *hash, uint32_t lsid)
 {
     struct cli_ac_lsig *ac_lsig = root->ac_lsigtable[lsid];
-    uint8_t * code_start = ac_lsig->u.code_start;
-    int rc = 0;
+    int rc;
     YR_SCAN_CONTEXT context = {0};
  
     if (target_info != NULL) {
@@ -779,23 +781,30 @@ static int yara_eval(cli_ctx *ctx, struct cli_matcher *root, struct cli_ac_data 
 
     rc = yr_execute_code(ac_lsig, acdata, &context, 0, 0);
 
-    if (rc == CL_VIRUS)
-        cli_append_virus(ctx, ac_lsig->virname);
-
+    if (rc == CL_VIRUS) {
+        if (ac_lsig->flag & CLI_LSIG_FLAG_PRIVATE) {
+            rc = CL_CLEAN;
+        } else {
+            cli_append_virus(ctx, ac_lsig->virname);
+        }
+    }
     return rc;
 }
+#endif
 
 int cli_exp_eval(cli_ctx *ctx, struct cli_matcher *root, struct cli_ac_data *acdata, struct cli_target_info *target_info, const char *hash)
 {
     uint8_t viruses_found = 0;
     uint32_t i;
-    int32_t rc;
+    int32_t rc = CL_SUCCESS;
 
     for(i = 0; i < root->ac_lsigs; i++) {
         if (root->ac_lsigtable[i]->type == CLI_LSIG_NORMAL)
             rc = lsig_eval(ctx, root, acdata, target_info, hash, i);
+#ifdef HAVE_YARA
         else if (root->ac_lsigtable[i]->type == CLI_YARA_NORMAL || root->ac_lsigtable[i]->type == CLI_YARA_OFFSET)
             rc = yara_eval(ctx, root, acdata, target_info, hash, i);
+#endif
         if (rc == CL_VIRUS) {
             viruses_found = 1;
             if (SCAN_ALL)

@@ -2,6 +2,7 @@
  *  Normalise HTML text.
  *  Decode MS Script Encoder protection. 
  *
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2007-2013 Sourcefire, Inc.
  *
  *  Authors: Trog
@@ -583,8 +584,10 @@ static void screnc_decode(unsigned char *ptr, struct screnc_state *s)
 		} else {
 			*dst++ = *ptr++;
 			*dst++ = *ptr;
-			if (!*ptr)
+			if (!*ptr) {
+				dst--;
 				break;
+			}
 		}
 		ptr++;
 		s->length--;

@@ -1,4 +1,5 @@
 /*
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2007-2009 Sourcefire, Inc.
  *
  *  Authors: Tomasz Kojm
@@ -61,6 +62,7 @@ struct cli_ac_data {
     uint32_t **lsigcnt;
     uint32_t **lsigsuboff_last, **lsigsuboff_first;
     struct cli_lsig_matches **lsig_matches;
+    uint8_t *yr_matches;
     uint32_t *offset;
     uint32_t macro_lastmatch[32];
     /** Hashset for versioninfo matching */
@@ -70,7 +72,6 @@ struct cli_ac_data {
 
 struct cli_alt_node {
     uint16_t *str;
-    //unsigned char *str;
     uint16_t len;
     uint8_t unique;
     struct cli_alt_node *next;
@@ -78,18 +79,16 @@ struct cli_alt_node {
 
 struct cli_ac_special {
     union {
-        //uint16_t *byte;
-        //uint16_t **f_str;
         unsigned char *byte;
         unsigned char **f_str;
         struct cli_alt_node *v_str;
     } alt;
-    uint16_t len, num;
+    uint16_t len[2], num; /* 0=MIN, 1=MAX */
     uint16_t type, negative;
 };
 
 struct cli_ac_patt {
-    uint16_t *pattern, *prefix, length, prefix_length;
+    uint16_t *pattern, *prefix, length[3], prefix_length[3];
     uint32_t mindist, maxdist;
     uint32_t sigid;
     uint32_t lsigid[3];

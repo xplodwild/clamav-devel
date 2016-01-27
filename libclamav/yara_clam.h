@@ -188,8 +188,6 @@ typedef struct _YR_OBJECT_ARRAY
 
 } YR_OBJECT_ARRAY;
 
-#if 1
-//TDB TEMP for exec.c compile
 typedef struct _YR_SCAN_CONTEXT
 {
   uint64_t  file_size;
@@ -203,7 +201,6 @@ typedef struct _YR_SCAN_CONTEXT
   //YR_CALLBACK_FUNC  callback;
   fmap_t * fmap;
 } YR_SCAN_CONTEXT;
-#endif
 
 struct _YR_OBJECT_FUNCTION;
 
@@ -219,9 +216,7 @@ typedef struct _YR_OBJECT_FUNCTION
   const char* arguments_fmt;
 
   YR_OBJECT* return_obj;
-    //#if REAL_YARA
   YR_MODULE_FUNC code;
-    //#endif
 
 } YR_OBJECT_FUNCTION;
 
@@ -298,8 +293,11 @@ typedef struct _SIZED_STRING
 
 #define FAIL_ON_COMPILER_ERROR(x) { \
   compiler->last_result = (x); \
-  if (compiler->last_result != ERROR_SUCCESS) \
+  if (compiler->last_result != ERROR_SUCCESS) { \
+    if (compiler->last_result == ERROR_INSUFICIENT_MEMORY) \
+      yyfatal(yyscanner, "YARA fatal error: terminating rule parse\n"); \
     return compiler->last_result; \
+  } \
 }
 
 /* From libyara/include/yara/re.h            */
@@ -399,13 +397,6 @@ struct RE {
 };
 
 
-/* From libyara/include/yara/compiler.h            */
-#define yr_compiler_set_error_extra_info(compiler, info) \
-    strlcpy( \
-        compiler->last_error_extra_info, \
-        info, \
-        sizeof(compiler->last_error_extra_info));
-
 /* From libyara/include/yara/limits.h            */
 #define MAX_COMPILER_ERROR_EXTRA_INFO   256
 #define MAX_LOOP_NESTING                4
@@ -445,6 +436,9 @@ struct RE {
 #define yr_realloc cli_realloc
 #define yr_free free
 #define xtoi cli_xtoi
+
+#undef strlcpy
+#undef strlcat
 #define strlcpy cli_strlcpy
 #define strlcat cli_strlcat
 
@@ -456,6 +450,7 @@ struct _yc_rule {
     uint32_t g_flags;
     uint32_t cl_flags;
     uint8_t * code_start;
+    uint32_t lsigid;
 };
 typedef struct _yc_rule yc_rule;
 typedef struct _yc_string {

@@ -1,6 +1,7 @@
 /*
  * Extract component parts of OLE2 files (e.g. MS Office Documents)
  * 
+ * Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  * Copyright (C) 2007-2013 Sourcefire, Inc.
  * 
  * Authors: Kevin Lin
@@ -782,10 +783,13 @@ static int ole2_summary_propset_json(summary_ctx_t *sctx, off_t offset)
         cli_dbgmsg("ole2_summary_propset_json: propid: 0x%08x, propoff: %u\n", propid, propoff);
 
         sctx->propname = NULL; sctx->writecp = 0;
-        if (!sctx->mode)
-            ole2_translate_summary_propid(sctx, propid);
-        else
+        switch (sctx->mode) {
+        case 1:
             ole2_translate_docsummary_propid(sctx, propid);
+            break;
+        default:
+            ole2_translate_summary_propid(sctx, propid);
+        }
 
         if (sctx->propname != NULL) {
             ret = ole2_process_property(sctx, ps, propoff);
@@ -888,7 +892,7 @@ int cli_ole2_summary_json(cli_ctx *ctx, int fd, int mode)
         return CL_ENULLARG; /* placeholder */
     }
 
-    if (mode != 0 && mode != 1) {
+    if (mode < 0 && mode > 2) {
         cli_dbgmsg("ole2_summary_json: invalid mode specified\n");
         return CL_ENULLARG; /* placeholder */
     }
@@ -911,10 +915,20 @@ int cli_ole2_summary_json(cli_ctx *ctx, int fd, int mode)
     sctx.maplen = sctx.sfmap->len;
     cli_dbgmsg("ole2_summary_json: streamsize: %u\n", sctx.maplen);
 
-    if (!mode)
-        sctx.summary = cli_jsonobj(ctx->wrkproperty, "SummaryInfo");
-    else
+    switch (mode) {
+    case 1:
         sctx.summary = cli_jsonobj(ctx->wrkproperty, "DocSummaryInfo");
+        break;
+    case 2:
+        sctx.summary = cli_jsonobj(ctx->wrkproperty, "Hwp5SummaryInfo");
+        break;
+    case 0:
+    default:
+        sctx.summary = cli_jsonobj(ctx->wrkproperty, "SummaryInfo");
+        break;
+    }
+
+
     if (!sctx.summary) {
         cli_errmsg("ole2_summary_json: no memory for json object.\n");
         return cli_ole2_summary_json_cleanup(&sctx, CL_EMEM);

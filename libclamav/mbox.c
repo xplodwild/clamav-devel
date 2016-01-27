@@ -1,4 +1,5 @@
 /*
+ *  Copyright (C) 2015 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
  *  Copyright (C) 2007-2008 Sourcefire, Inc.
  *
  *  Authors: Nigel Horne
@@ -723,7 +724,7 @@ parseEmailFile(fmap_t *map, size_t *at, const table_t *rfc821, const char *first
 				 * Handle broken headers, where the next
 				 * line isn't indented by whitespace
 				 */
-				if(fullline[fulllinelength - 2] == ';')
+				if(fullline[strlen(fullline) - 1] == ';')
 					/* Add arguments to this line */
 					continue;
 
