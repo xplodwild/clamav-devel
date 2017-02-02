@@ -149,6 +149,9 @@ Detect partition intersections in raw disk images using heuristics.
 .TP
 \fB\-\-algorithmic\-detection[=yes(*)/no]\fR
 In some cases (eg. complex malware, exploits in graphic files, and others), ClamAV uses special algorithms to provide accurate detection. This option can be used to control the algorithmic detection.
+.TP
+\fB\-\-normalize[=yes(*)/no]\fR
+Normalize (compress whitespace, downcase, etc.) html, script, and text files. Use normalize=no for yara compatibility. 
 .TP 
 \fB\-\-scan\-pe[=yes(*)/no]\fR
 PE stands for Portable Executable \- it's an executable file format used in all 32\-bit versions of Windows operating systems. By default ClamAV performs deeper analysis of executable files and attempts to decompress popular executable packers such as UPX, Petite, and FSG. If you turn off this option, the original files will still be scanned but without additional processing.
@@ -168,6 +171,12 @@ Scan SWF files. If you turn off this option, the original files will still be sc
 \fB\-\-scan\-html[=yes(*)/no]\fR
 Detect, normalize/decrypt and scan HTML files and embedded scripts. If you turn off this option, the original files will still be scanned, but without additional processing.
 .TP 
+\fB\-\-scan\-xmldocs[=yes(*)/no]\fR
+Scan xml-based document files supported by libclamav. If you turn off this option, the original files will still be scanned, but without additional processing.
+.TP 
+\fB\-\-scan\-hwp3[=yes(*)/no]\fR
+Scan HWP3 files. If you turn off this option, the original files will still be scanned, but without additional processing.
+.TP 
 \fB\-\-scan\-archive[=yes(*)/no]\fR
 Scan archives supported by libclamav. If you turn off this option, the original files will still be scanned, but without unpacking and additional processing.
 .TP 
@@ -176,6 +185,12 @@ Mark broken executables as viruses (Broken.Executable).
 .TP 
 \fB\-\-block\-encrypted[=yes/no(*)]\fR
 Mark encrypted archives as viruses (Encrypted.Zip, Encrypted.RAR).
+.TP 
+\fB\-\-block\-macros[=yes/no(*)]\fR
+Mark OLE2 files containing VBA macros as viruses (Heuristics.OLE2.ContainsMacros).
+.TP 
+\fB\-\-block\-max[=yes/no(*)]\fR
+Flag files with "Heuristics.Limits.Exceeded" when scanning is incomplete due to exceeding a scan or file size limit.
 .TP 
 \fB\-\-max\-filesize=#n\fR
 Extract and scan at most #n bytes from each archive. You may pass the value in kilobytes in format xK or xk, or megabytes in format xM or xm, where x is a number. This option protects your system against DoS attacks (default: 25 MB, max: <4 GB)
@@ -272,7 +287,7 @@ Disable caching and cache checks for hash sums of scanned files.
 .TP 
 1 : Virus(es) found.
 .TP 
-2 : Some error(s) occured.
+2 : Some error(s) occurred.
 .SH "CREDITS"
 Please check the full documentation for credits.
 .SH "AUTHOR"

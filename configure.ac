@@ -87,6 +87,7 @@ AM_MAINTAINER_MODE
 m4_include([m4/reorganization/libs/libz.m4])
 m4_include([m4/reorganization/libs/bzip.m4])
 m4_include([m4/reorganization/libs/unrar.m4])
+m4_include([m4/reorganization/libs/systemd.m4])
 m4_include([m4/reorganization/code_checks/ipv6.m4])
 m4_include([m4/reorganization/code_checks/dns.m4])
 m4_include([m4/reorganization/code_checks/fanotify.m4])
@@ -124,6 +125,9 @@ m4_include([m4/reorganization/distcheck.m4])
 m4_include([m4/reorganization/llvm.m4])
 m4_include([m4/reorganization/sha_collect.m4])
 m4_include([m4/reorganization/yara.m4])
+m4_include([m4/reorganization/libfreshclam.m4])
+
+m4_include([m4/reorganization/prelude.m4])
 
 m4_include([m4/reorganization/bsd.m4])
 
@@ -132,16 +136,27 @@ m4_include([m4/reorganization/libs/curl.m4])
 
 m4_include([m4/reorganization/substitutions.m4])
 
-AM_CONDITIONAL([ENABLE_CLAMSUBMIT], [test "$have_curl" = "yes"])
+m4_include([m4/reorganization/libmspack.m4])
+
+if test "x$use_internal_mspack" = "xyes"; then
+    mspack_msg="Internal"
+    AC_CONFIG_SUBDIRS([libclamav/libmspack-0.5alpha])
+else
+    mspack_msg="External, $LIBMSPACK_CFLAGS $LIBMSPACK_LIBS"
+fi
+
 
 AC_CONFIG_FILES([
 clamscan/Makefile
 database/Makefile
 docs/Makefile
 clamd/Makefile
+clamd/clamav-daemon.service
+clamd/clamav-daemon.socket
 clamdscan/Makefile
 clamsubmit/Makefile
 clamav-milter/Makefile
+freshclam/clamav-freshclam.service
 freshclam/Makefile
 sigtool/Makefile
 clamconf/Makefile
@@ -150,6 +165,7 @@ test/Makefile
 unit_tests/Makefile
 clamdtop/Makefile
 clambc/Makefile
+libfreshclam/Makefile
 Makefile
 clamav-config
 libclamav.pc
@@ -225,10 +241,12 @@ have_jit="no"
 if test "$subdirfailed" = "no"; then
     have_jit="yes"
 fi
-if test "x$llvm_linking" = "x"; then
-   CL_MSG_STATUS([llvm        ],[$have_jit, from $system_llvm],[$enable_llvm])
+if test "$enable_llvm" = "no"; then
+   CL_MSG_STATUS([llvm        ],[$have_jit],[$enable_llvm])
+elif test "x$llvm_linking" = "x"; then
+   CL_MSG_STATUS([llvm        ],[$have_jit($llvmver), from $system_llvm],[$enable_llvm])
 else
-   CL_MSG_STATUS([llvm        ],[$have_jit, from $system_llvm ($llvm_linking)],[$enable_llvm])
+   CL_MSG_STATUS([llvm        ],[$have_jit($llvmver), from $system_llvm ($llvm_linking)],[$enable_llvm])
 fi
 CL_MSG_STATUS([mempool     ],[$have_mempool],[$enable_mempool])
 
@@ -244,6 +262,8 @@ if test "x$PCRE_HOME" = "x"; then
 else
     CL_MSG_STATUS([pcre        ],[$PCRE_HOME],[$have_pcre])
 fi
+CL_MSG_STATUS([preclass    ],[$LIBJSON_HOME],[$have_json])
+CL_MSG_STATUS([libmspack   ],[yes],[$mspack_msg])
 if test "x$XML_LIBS" = "x"; then 
     CL_MSG_STATUS([libxml2     ],[no],[])
 else

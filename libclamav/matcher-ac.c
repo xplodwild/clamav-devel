@@ -1761,7 +1761,10 @@ int cli_ac_scanbuff(const unsigned char *buffer, uint32_t length, const char **v
                             if(pt->partno != 1) {
                                 for(j = 1; j <= CLI_DEFAULT_AC_TRACKLEN + 1 && offmatrix[pt->partno - 2][j] != -1; j++) {
                                     found = j;
-                                    if(pt->maxdist)
+                                    if(realoff < offmatrix[pt->partno - 2][j])
+                                        found = 0;
+
+                                    if(found && pt->maxdist)
                                         if(realoff - offmatrix[pt->partno - 2][j] > pt->maxdist)
                                             found = 0;
 
@@ -2138,7 +2141,7 @@ inline static int ac_addspecial_add_alt_node(const char *subexpr, uint8_t sigopt
 
     s = cli_mpool_hex2ui(root->mempool, subexpr);
     if (!s) {
-        free(newnode);
+        mpool_free(root->mempool, newnode);
         return CL_EMALFDB;
     }
 
@@ -2584,8 +2587,9 @@ int cli_ac_addsig(struct cli_matcher *root, const char *virname, const char *hex
 
             if (nest > ACPATT_ALTN_MAXNEST) {
                 cli_errmsg("ac_addspecial: Expression exceeds maximum alternate nesting limit\n");
-                free(hexcpy);
-                return CL_EMALFDB;
+                mpool_free(root->mempool, newspecial);
+                error = CL_EMALFDB;
+                break;
             }
 
             if(!strcmp(pt, "B")) {

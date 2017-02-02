@@ -40,6 +40,7 @@
 
 #include "shared/optparser.h"
 #include "shared/output.h"
+#include "shared/misc.h"
 
 #include "others.h"
 #include "server.h"
@@ -60,11 +61,94 @@ int localserver(const struct optstruct *opts)
 	int sockfd, backlog;
 	STATBUF foo;
 	char *estr;
+        char *sockdir;
+        char *pos;
+        struct stat sb;
+        int cnt;
 
+    int num_fd = sd_listen_fds(0);
+    if (num_fd > 2)
+    {
+        logg("!LOCAL: Received more than two file descriptors from systemd.\n");
+        return -1;
+    }
+    else if (num_fd > 0)
+    {
+        /* use socket passed by systemd */
+        int i;
+        for(i = 0; i < num_fd; i += 1)
+        {
+            sockfd = SD_LISTEN_FDS_START + i;
+            if (sd_is_socket(sockfd, AF_UNIX, SOCK_STREAM, 1) == 1)
+            {
+                /* correct socket */
+                break;
+            }
+            else
+            {
+                /* wrong socket */
+                sockfd = -2;
+            }
+        }
+        if (sockfd == -2)
+        {
+            logg("#LOCAL: No local AF_UNIX SOCK_STREAM socket received from systemd.\n");
+            return -2;
+        }
+        logg("#LOCAL: Received AF_UNIX SOCK_STREAM socket from systemd.\n");
+        return sockfd;
+    }
+    /* create socket */
     memset((char *) &server, 0, sizeof(server));
     server.sun_family = AF_UNIX;
     strncpy(server.sun_path, optget(opts, "LocalSocket")->strarg, sizeof(server.sun_path));
     server.sun_path[sizeof(server.sun_path)-1]='\0';
+
+    pos = NULL;
+    if ((pos = strstr(server.sun_path, "/")) && (pos = strstr(((char*) pos + 1), "/"))) {
+        cnt = 0;
+        sockdir = NULL;
+        pos = server.sun_path + strlen(server.sun_path);
+        while (pos != server.sun_path) {
+            if (*pos == '/') {
+                sockdir = strndup(server.sun_path, strlen(server.sun_path) - cnt);
+                break;
+            }
+            else {
+                pos--;
+                cnt++;
+            }
+        }
+
+        if (stat(sockdir, &sb)) {
+            if (errno == ENOENT) {
+                mode_t sock_mode;
+                if(optget(opts, "LocalSocketMode")->enabled) {
+                    char *end;
+                    sock_mode = strtol(optget(opts, "LocalSocketMode")->strarg, &end, 8);
+
+                    if(*end) {
+                        logg("!Invalid LocalSocketMode %s\n", optget(opts, "LocalSocketMode")->strarg);
+                        free(sockdir);
+                        return -1;
+                    }
+                } else {
+                    sock_mode = 0777;
+                }
+
+                if (mkdir(sockdir, sock_mode)) {
+                    logg("!LOCAL: Could not create socket directory: %s: %s\n", sockdir, strerror(errno));
+                    if (errno == ENOENT) {
+                        logg("!LOCAL: Ensure parent directory exists.\n");
+                    }
+                }
+                else {
+                    logg("Localserver: Creating socket directory: %s\n", sockdir);
+                }
+            }
+        }
+        free(sockdir);
+    }
 
     if((sockfd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
 	estr = strerror(errno);

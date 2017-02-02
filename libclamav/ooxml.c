@@ -128,7 +128,7 @@ static int ooxml_parse_document(int fd, cli_ctx *ctx)
         return CL_SUCCESS; // internal error from libxml2
     }
 
-    ret = cli_msxml_parse_document(ctx, reader, ooxml_keys, num_ooxml_keys, 1, NULL);
+    ret = cli_msxml_parse_document(ctx, reader, ooxml_keys, num_ooxml_keys, MSXML_FLAG_JSON, NULL);
 
     if (ret != CL_SUCCESS && ret != CL_ETIMEOUT && ret != CL_BREAK)
         cli_warnmsg("ooxml_parse_document: encountered issue in parsing properties document\n");
@@ -349,7 +349,7 @@ static const struct key_entry ooxml_hwp_keys[] = {
     { "hcfversion",         "HCFVersion",         MSXML_JSON_ROOT | MSXML_JSON_ATTRIB },
 
     { "package",            "Properties",         MSXML_JSON_ROOT | MSXML_JSON_ATTRIB },
-    { "metadata",           "Metadata",           MSXML_JSON_ROOT | MSXML_JSON_ATTRIB },
+    { "metadata",           "Metadata",           MSXML_JSON_WRKPTR | MSXML_JSON_ATTRIB },
     { "title",              "Title",              MSXML_JSON_WRKPTR | MSXML_JSON_VALUE },
     { "language",           "Language",           MSXML_JSON_WRKPTR | MSXML_JSON_VALUE },
     { "meta",               "MetaFields",         MSXML_JSON_WRKPTR | MSXML_JSON_ATTRIB | MSXML_JSON_VALUE | MSXML_JSON_COUNT | MSXML_JSON_MULTI },
@@ -375,7 +375,7 @@ static int ooxml_hwp_cb(int fd, cli_ctx *ctx)
         return CL_SUCCESS; // internal error from libxml2
     }
 
-    ret = cli_msxml_parse_document(ctx, reader, ooxml_hwp_keys, num_ooxml_hwp_keys, 1, NULL);
+    ret = cli_msxml_parse_document(ctx, reader, ooxml_hwp_keys, num_ooxml_hwp_keys, MSXML_FLAG_JSON, NULL);
 
     if (ret != CL_SUCCESS && ret != CL_ETIMEOUT && ret != CL_BREAK)
         cli_warnmsg("ooxml_hwp_cb: encountered issue in parsing properties document\n");

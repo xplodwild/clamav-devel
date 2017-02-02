@@ -617,12 +617,12 @@ int cl_engine_set_num(struct cl_engine *engine, enum cl_engine_field field, long
 	case CL_ENGINE_MAX_ICONSPE:
 	    engine->maxiconspe = (uint32_t)num;
 	    break;
-    case CL_ENGINE_MAX_RECHWP3:
+	case CL_ENGINE_MAX_RECHWP3:
 	    engine->maxrechwp3 = (uint32_t)num;
 	    break;
 	case CL_ENGINE_TIME_LIMIT:
-            engine->time_limit = (uint32_t)num;
-            break;
+	    engine->time_limit = (uint32_t)num;
+	    break;
 	case CL_ENGINE_PCRE_MATCH_LIMIT:
 	    engine->pcre_match_limit = (uint64_t)num;
 	    break;
@@ -631,6 +631,20 @@ int cl_engine_set_num(struct cl_engine *engine, enum cl_engine_field field, long
 	    break;
 	case CL_ENGINE_PCRE_MAX_FILESIZE:
 	    engine->pcre_max_filesize = (uint64_t)num;
+	    break;
+	case CL_ENGINE_DISABLE_PE_CERTS:
+	    if (num) {
+		engine->engine_options |= ENGINE_OPTIONS_DISABLE_PE_CERTS;
+	    } else {
+		engine->engine_options &= ~(ENGINE_OPTIONS_DISABLE_PE_CERTS);
+	    }
+	    break;
+	case CL_ENGINE_PE_DUMPCERTS:
+	    if (num) {
+		engine->engine_options |= ENGINE_OPTIONS_PE_DUMPCERTS;
+	    } else {
+		engine->engine_options &= ~(ENGINE_OPTIONS_PE_DUMPCERTS);
+	    }
 	    break;
 	default:
 	    cli_errmsg("cl_engine_set_num: Incorrect field number\n");
@@ -778,7 +792,8 @@ struct cl_settings *cl_engine_settings_copy(const struct cl_engine *engine)
 
     settings = (struct cl_settings *) malloc(sizeof(struct cl_settings));
     if(!settings) {
-        cli_errmsg("cl_engine_settings_copy: Unable to allocate memory for settings %u\n", sizeof(struct cl_settings));
+        cli_errmsg("cl_engine_settings_copy: Unable to allocate memory for settings %llu\n",
+                   (long long unsigned)sizeof(struct cl_settings));
         return NULL;
     }
 
@@ -919,6 +934,16 @@ int cl_engine_settings_free(struct cl_settings *settings)
     return CL_SUCCESS;
 }
 
+void cli_check_blockmax(cli_ctx *ctx, int rc)
+{
+    if (BLOCKMAX && !ctx->limit_exceeded) {
+        cli_append_virus (ctx, "Heuristic.Limits.Exceeded");
+        ctx->limit_exceeded = 1;
+        cli_dbgmsg ("Limit %s Exceeded: scanning may be incomplete and additional analysis needed for this file.\n",
+            cl_strerror(rc));
+    }
+}
+
 int cli_checklimits(const char *who, cli_ctx *ctx, unsigned long need1, unsigned long need2, unsigned long need3) {
     int ret = CL_SUCCESS;
     unsigned long needed;
@@ -948,8 +973,12 @@ int cli_checklimits(const char *who, cli_ctx *ctx, unsigned long need1, unsigned
 
     if(ctx->engine->maxfiles && ctx->scannedfiles>=ctx->engine->maxfiles) {
         cli_dbgmsg("%s: files limit reached (max: %u)\n", who, ctx->engine->maxfiles);
-	return CL_EMAXFILES;
+	ret = CL_EMAXFILES;
     }
+
+    if (ret != CL_SUCCESS)
+        cli_check_blockmax(ctx, ret);
+
     return ret;
 }
 
@@ -1063,10 +1092,12 @@ void cli_append_virus(cli_ctx * ctx, const char * virname)
 {
     if (ctx->virname == NULL)
         return;
-    if (ctx->engine->cb_virus_found)
-        ctx->engine->cb_virus_found(fmap_fd(*ctx->fmap), virname, ctx->cb_ctx);
-    ctx->num_viruses++;
-    *ctx->virname = virname;
+    if (ctx->limit_exceeded == 0 || SCAN_ALL) { 
+        if (ctx->engine->cb_virus_found)
+            ctx->engine->cb_virus_found(fmap_fd(*ctx->fmap), virname, ctx->cb_ctx);
+        ctx->num_viruses++;
+        *ctx->virname = virname;
+    }
 #if HAVE_JSON
     if (SCAN_PROPERTIES && ctx->wrkproperty) {
         json_object *arrobj, *virobj;
@@ -1101,6 +1132,30 @@ const char * cli_get_last_virus_str(const cli_ctx * ctx)
     if ((ret = cli_get_last_virus(ctx)))
 	return ret;
     return "";
+}
+
+void cli_set_container(cli_ctx *ctx, cli_file_t type, size_t size)
+{
+    ctx->containers[ctx->recursion].type = type;
+    ctx->containers[ctx->recursion].size = size;
+}
+
+cli_file_t cli_get_container_type(cli_ctx *ctx, int index)
+{
+    if (index < 0)
+	index = ctx->recursion + index + 1;
+    if (index >= 0 && index <= ctx->recursion)
+	return ctx->containers[index].type;
+    return CL_TYPE_ANY;
+}
+
+size_t cli_get_container_size(cli_ctx *ctx, int index)
+{
+    if (index < 0)
+	index = ctx->recursion + index + 1;
+    if (index >= 0 && index <= ctx->recursion)
+	return ctx->containers[index].size;
+    return 0;
 }
 
 
@@ -1216,7 +1271,7 @@ int cli_rmdirs(const char *dirname)
 		    if(strcmp(dent->d_name, ".") && strcmp(dent->d_name, "..")) {
 			path = cli_malloc(strlen(dirname) + strlen(dent->d_name) + 2);
 			if(!path) {
-                cli_errmsg("cli_rmdirs: Unable to allocate memory for path %lu\n", strlen(dirname) + strlen(dent->d_name) + 2);
+                cli_errmsg("cli_rmdirs: Unable to allocate memory for path %llu\n", (long long unsigned)(strlen(dirname) + strlen(dent->d_name) + 2));
 			    closedir(dd);
 			    return -1;
 			}
@@ -1288,7 +1343,7 @@ bitset_t *cli_bitset_init(void)
 	
 	bs = cli_malloc(sizeof(bitset_t));
 	if (!bs) {
-        cli_errmsg("cli_bitset_init: Unable to allocate memory for bs %u\n", sizeof(bitset_t));
+        cli_errmsg("cli_bitset_init: Unable to allocate memory for bs %llu\n", (long long unsigned)sizeof(bitset_t));
 		return NULL;
 	}
 	bs->length = BITSET_DEFAULT_SIZE;

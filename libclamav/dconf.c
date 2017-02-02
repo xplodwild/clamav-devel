@@ -72,9 +72,9 @@ static struct dconf_module modules[] = {
     { "PE",     "UPACK",        PE_CONF_UPACK,      1 },
     { "PE",     "ASPACK",       PE_CONF_ASPACK,     1 },
     { "PE",     "CATALOG",      PE_CONF_CATALOG,        1 },
-    { "PE",     "DISABLECERT",  PE_CONF_DISABLECERT,    0 },
-    { "PE",     "DUMPCERT",     PE_CONF_DUMPCERT,       0 },
-    { "PE",     "MATCHICON",     PE_CONF_MATCHICON,       1 },
+    { "PE",     "CERTS",        PE_CONF_CERTS,      1 },
+    { "PE",     "MATCHICON",    PE_CONF_MATCHICON,       1 },
+    { "PE",     "IMPTBL",       PE_CONF_IMPTBL,          1 },
 
     { "ELF",        NULL,       0x1,            1 },
 
@@ -103,6 +103,9 @@ static struct dconf_module modules[] = {
     { "ARCHIVE",    "HFSPLUS",      ARCH_CONF_HFSPLUS,      1 },
     { "ARCHIVE",    "XZ",       ARCH_CONF_XZ,       1 },
     { "ARCHIVE",    "PASSWD",   ARCH_CONF_PASSWD,   1 },
+    { "ARCHIVE",    "MBR",      ARCH_CONF_MBR,      1 },
+    { "ARCHIVE",    "GPT",      ARCH_CONF_GPT,      1 },
+    { "ARCHIVE",    "APM",      ARCH_CONF_APM,      1 },
 
     { "DOCUMENT",   "HTML",     DOC_CONF_HTML,      1 },
     { "DOCUMENT",   "RTF",      DOC_CONF_RTF,       1 },
@@ -111,6 +114,9 @@ static struct dconf_module modules[] = {
     { "DOCUMENT",   "HTMLSKIPRAW",  DOC_CONF_HTML_SKIPRAW,  1 },
     { "DOCUMENT",   "JSNORM",       DOC_CONF_JSNORM,        1 },
     { "DOCUMENT",   "SWF",      DOC_CONF_SWF,       1 },
+    { "DOCUMENT",   "OOXML",    DOC_CONF_OOXML,     1 },
+    { "DOCUMENT",   "MSPML",    DOC_CONF_MSXML,     1 },
+    { "DOCUMENT",   "HWP",      DOC_CONF_HWP,       1 },
 
     { "MAIL",       "MBOX",     MAIL_CONF_MBOX,     1 },
     { "MAIL",       "TNEF",     MAIL_CONF_TNEF,     1 },
@@ -125,6 +131,7 @@ static struct dconf_module modules[] = {
     { "OTHER",      "PREFILTERING", OTHER_CONF_PREFILTERING,1 },
     { "OTHER",      "PDFNAMEOBJ",   OTHER_CONF_PDFNAMEOBJ,  1 },
     { "OTHER",      "PRTNINTXN",   OTHER_CONF_PRTNINTXN,  1 },
+    { "OTHER",      "LZW",      OTHER_CONF_LZW,     1 },
 
     { "PHISHING",   "ENGINE",       PHISHING_CONF_ENGINE,   1 },
     { "PHISHING",   "ENTCONV",      PHISHING_CONF_ENTCONV,  1 },

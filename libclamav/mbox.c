@@ -70,6 +70,20 @@
 #include "mbox.h"
 #include "dconf.h"
 #include "fmap.h"
+#include "json_api.h"
+#include "msxml_parser.h"
+
+#if HAVE_LIBXML2
+#ifdef _WIN32
+#ifndef LIBXML_WRITER_ENABLED
+#define LIBXML_WRITER_ENABLED 1
+#endif
+#endif
+#include <libxml/xmlversion.h>
+#include <libxml/HTMLtree.h>
+#include <libxml/HTMLparser.h>
+#include <libxml/xmlreader.h>
+#endif
 
 #define DCONF_PHISHING mctx->ctx->dconf->phishing
 
@@ -168,6 +182,9 @@ typedef	struct	mbox_ctx {
 	const	table_t	*subtypeTable;
 	cli_ctx	*ctx;
 	unsigned	int	files;	/* number of files extracted */
+#if HAVE_JSON
+	json_object *wrkobj;
+#endif
 } mbox_ctx;
 
 /* if supported by the system, use the optimized
@@ -187,6 +204,8 @@ static	int	cli_parse_mbox(const char *dir, cli_ctx *ctx);
 static	message	*parseEmailFile(fmap_t *map, size_t *at, const table_t *rfc821Table, const char *firstLine, const char *dir);
 static	message	*parseEmailHeaders(message *m, const table_t *rfc821Table);
 static	int	parseEmailHeader(message *m, const char *line, const table_t *rfc821Table);
+static	int	parseMHTMLComment(const char *comment, cli_ctx *ctx, void *wrkjobj, void *cbdata);
+static	mbox_status	parseRootMHTML(mbox_ctx *mctx, message *m, text *t);
 static	mbox_status	parseEmailBody(message *messageIn, text *textIn, mbox_ctx *mctx, unsigned int recursion_level);
 static	int	boundaryStart(const char *line, const char *boundary);
 static	int	boundaryEnd(const char *line, const char *boundary);
@@ -203,6 +222,8 @@ static	char	*getline_from_mbox(char *buffer, size_t len, fmap_t *map, size_t *at
 static	bool	isBounceStart(mbox_ctx *mctx, const char *line);
 static	bool	exportBinhexMessage(mbox_ctx *mctx, message *m);
 static	int	exportBounceMessage(mbox_ctx *ctx, text *start);
+static	const	char	*getMimeTypeStr(mime_type mimetype);
+static	const	char	*getEncTypeStr(encoding_type enctype);
 static	message	*do_multipart(message *mainMessage, message **messages, int i, mbox_status *rc, mbox_ctx *mctx, message *messageIn, text **tptr, unsigned int recursion_level);
 static	int	count_quotes(const char *buf);
 static	bool	next_is_folded_header(const text *t);
@@ -292,6 +313,28 @@ static	const	struct tableinit {
 	{	"knowbot-code",		KNOWBOT		},	/* ??? */
 	{	"knowbot-state",	KNOWBOT		},	/* ??? */
 	{	NULL,		0		}
+}, mimeTypeStr[] = {
+	{	"NOMIME", 	NOMIME		},
+	{	"APPLICATION",	APPLICATION	},
+	{	"AUDIO",	AUDIO		},
+	{	"IMAGE",	IMAGE		},
+	{	"MESSAGE",	MESSAGE		},
+	{	"MULTIPART",	MULTIPART	},
+	{	"TEXT",		TEXT		},
+	{	"VIDEO",	VIDEO		},
+	{	"MEXTENSION",	MEXTENSION	},
+	{	NULL,		0		}
+}, encTypeStr[] = {
+	{	"NOENCODING", 	NOENCODING	},
+	{	"QUOTEDPRINTABLE", 	QUOTEDPRINTABLE	},
+	{	"BASE64", 	BASE64		},
+	{	"EIGHTBIT", 	EIGHTBIT	},
+	{	"BINARY", 	BINARY		},
+	{	"UUENCODE", 	UUENCODE	},
+	{	"YENCODE", 	YENCODE		},
+	{	"EEXTENSION", 	EEXTENSION	},
+	{	"BINHEX", 	BINHEX		},
+	{	NULL,		0		}
 };
 
 #ifdef	CL_THREAD_SAFE
@@ -368,6 +411,9 @@ cli_parse_mbox(const char *dir, cli_ctx *ctx)
 	mctx.subtypeTable = subtype;
 	mctx.ctx = ctx;
 	mctx.files = 0;
+#if HAVE_JSON
+	mctx.wrkobj = ctx->wrkproperty;
+#endif
 
 	/*
 	 * Is it a UNIX style mbox with more than one
@@ -1000,7 +1046,7 @@ parseEmailHeader(message *m, const char *line, const table_t *rfc821)
 	 * In RFC822 the separater between the key a value is a colon,
 	 * e.g.	Content-Transfer-Encoding: base64
 	 * However some MUA's are lapse about this and virus writers exploit
-	 * this hole, so we need to check all known possiblities
+	 * this hole, so we need to check all known possibilities
 	 */
 	for(separater = ":= "; *separater; separater++)
 		if(strchr(line, *separater) != NULL)
@@ -1046,6 +1092,222 @@ parseEmailHeader(message *m, const char *line, const table_t *rfc821)
 	return ret;
 }
 
+#if HAVE_LIBXML2
+static const struct key_entry mhtml_keys[] = {
+	/* root html tags for microsoft office document */
+	{	"html",			"RootHTML",		MSXML_JSON_ROOT | MSXML_JSON_ATTRIB	},
+
+	{	"head",			"Head",			MSXML_JSON_WRKPTR | MSXML_COMMENT_CB	},
+	{	"meta",			"Meta",			MSXML_JSON_WRKPTR | MSXML_JSON_MULTI | MSXML_JSON_ATTRIB	},
+	{	"link",			"Link",			MSXML_JSON_WRKPTR | MSXML_JSON_MULTI | MSXML_JSON_ATTRIB	},
+	{	"script",		"Script",		MSXML_JSON_WRKPTR | MSXML_JSON_MULTI | MSXML_JSON_VALUE		}
+};
+static size_t num_mhtml_keys = sizeof(mhtml_keys) / sizeof(struct key_entry);
+
+static const struct key_entry mhtml_comment_keys[] = {
+	/* embedded xml tags (comment) for microsoft office document */
+	{	"o:documentproperties",	"DocumentProperties",	MSXML_JSON_ROOT | MSXML_JSON_ATTRIB	},
+	{	"o:author",		"Author",		MSXML_JSON_WRKPTR | MSXML_JSON_VALUE	},
+	{	"o:lastauthor",		"LastAuthor",		MSXML_JSON_WRKPTR | MSXML_JSON_VALUE	},
+	{	"o:revision",		"Revision",		MSXML_JSON_WRKPTR | MSXML_JSON_VALUE	},
+	{	"o:totaltime",		"TotalTime",		MSXML_JSON_WRKPTR | MSXML_JSON_VALUE	},
+	{	"o:created",		"Created",		MSXML_JSON_WRKPTR | MSXML_JSON_VALUE	},
+	{	"o:lastsaved",		"LastSaved",		MSXML_JSON_WRKPTR | MSXML_JSON_VALUE	},
+	{	"o:pages",		"Pages",		MSXML_JSON_WRKPTR | MSXML_JSON_VALUE	},
+	{	"o:words",		"Words",		MSXML_JSON_WRKPTR | MSXML_JSON_VALUE	},
+	{	"o:characters",		"Characters",		MSXML_JSON_WRKPTR | MSXML_JSON_VALUE	},
+	{	"o:company",		"Company",		MSXML_JSON_WRKPTR | MSXML_JSON_VALUE	},
+	{	"o:lines",		"Lines",		MSXML_JSON_WRKPTR | MSXML_JSON_VALUE	},
+	{	"o:paragraphs",		"Paragraphs",		MSXML_JSON_WRKPTR | MSXML_JSON_VALUE	},
+	{	"o:characterswithspaces",	"CharactersWithSpaces",	MSXML_JSON_WRKPTR | MSXML_JSON_VALUE	},
+	{	"o:version",		"Version",		MSXML_JSON_WRKPTR | MSXML_JSON_VALUE	},
+
+	{	"o:officedocumentsettings",	"DocumentSettings",	MSXML_IGNORE_ELEM	},
+	{	"w:worddocument",	"WordDocument",		MSXML_IGNORE_ELEM	},
+	{	"w:latentstyles",	"LatentStyles",		MSXML_IGNORE_ELEM	}
+};
+static size_t num_mhtml_comment_keys = sizeof(mhtml_comment_keys) / sizeof(struct key_entry);
+#endif
+
+/*
+ * The related multipart root HTML file comment parsing wrapper.
+ *
+ * Attempts to leverage msxml parser, cannot operate without LIBXML2.
+ * This function is only used for Preclassification JSON.
+ */
+static int
+parseMHTMLComment(const char *comment, cli_ctx *ctx, void *wrkjobj, void *cbdata)
+{
+#if HAVE_LIBXML2
+	const char *xmlsrt, *xmlend;
+	xmlTextReaderPtr reader;
+#if HAVE_JSON
+	json_object *thisjobj = (json_object *)wrkjobj;
+#endif
+	int ret = CL_SUCCESS;
+
+	UNUSEDPARAM(cbdata);
+
+	xmlend = comment;
+	while ((xmlsrt = strstr(xmlend, "<xml>"))) {
+		xmlend = strstr(xmlsrt, "</xml>");
+		if (xmlend == NULL) {
+			cli_dbgmsg("parseMHTMLComment: unbounded xml tag\n");
+			break;
+		}
+
+		reader = xmlReaderForMemory(xmlsrt, xmlend-xmlsrt+6, "comment.xml", NULL, CLAMAV_MIN_XMLREADER_FLAGS);
+		if (!reader) {
+			cli_dbgmsg("parseMHTMLComment: cannot intialize xmlReader\n");
+
+#if HAVE_JSON
+			ret = cli_json_parse_error(ctx->wrkproperty, "MHTML_ERROR_XML_READER_MEM");
+#endif
+			return ret; // libxml2 failed!
+		}
+
+		/* comment callback is not set to prevent recursion */
+		/* TODO: should we separate the key dictionaries? */
+		/* TODO: should we use the json object pointer? */
+		ret = cli_msxml_parse_document(ctx, reader, mhtml_comment_keys, num_mhtml_comment_keys, MSXML_FLAG_JSON, NULL);
+
+		xmlTextReaderClose(reader);
+		xmlFreeTextReader(reader);
+		if (ret != CL_SUCCESS)
+			return ret;
+	}
+#else
+	UNUSEDPARAM(comment);
+	UNUSEDPARAM(ctx);
+	UNUSEDPARAM(wrkjobj);
+	UNUSEDPARAM(cbdata);
+
+	cli_dbgmsg("in parseMHTMLComment\n");
+	cli_dbgmsg("parseMHTMLComment: parsing html xml-comments requires libxml2!\n");
+#endif
+	return CL_SUCCESS;
+}
+
+/*
+ * The related multipart root HTML file parsing wrapper.
+ *
+ * Attempts to leverage msxml parser, cannot operate without LIBXML2.
+ * This function is only used for Preclassification JSON.
+ */
+static mbox_status
+parseRootMHTML(mbox_ctx *mctx, message *m, text *t)
+{
+	cli_ctx *ctx = mctx->ctx;
+#if HAVE_LIBXML2
+#ifdef LIBXML_HTML_ENABLED
+	struct msxml_ctx mxctx;
+	blob *input;
+	htmlDocPtr htmlDoc;
+	xmlTextReaderPtr reader;
+	int ret = CL_SUCCESS;
+	mbox_status rc = OK;
+#if HAVE_JSON
+	json_object *rhtml;
+#endif
+
+	cli_dbgmsg("in parseRootMHTML\n");
+
+	if (ctx == NULL)
+		return OK;
+
+	if (m == NULL && t == NULL)
+		return OK;
+
+	if (m != NULL)
+		input = messageToBlob(m, 0);
+	else if (t != NULL)
+		input = textToBlob(t, NULL, 0);
+	if (input == NULL)
+		return OK;
+
+	htmlDoc = htmlReadMemory(input->data, input->len, "mhtml.html", NULL, CLAMAV_MIN_XMLREADER_FLAGS);
+	if (htmlDoc == NULL) {
+		cli_dbgmsg("parseRootMHTML: cannot intialize read html document\n");
+#if HAVE_JSON
+		ret = cli_json_parse_error(ctx->wrkproperty, "MHTML_ERROR_HTML_READ");
+		if (ret != CL_SUCCESS)
+			rc = FAIL;
+#endif
+		blobDestroy(input);
+		return rc;
+	}
+
+#if HAVE_JSON
+	if (mctx->wrkobj) {
+		rhtml = cli_jsonobj(mctx->wrkobj, "RootHTML");
+		if (rhtml != NULL) {
+			/* MHTML-specific properties */
+			cli_jsonstr(rhtml, "Encoding", htmlGetMetaEncoding(htmlDoc));
+			cli_jsonint(rhtml, "CompressMode", xmlGetDocCompressMode(htmlDoc));
+		}
+	}
+#endif
+
+	reader = xmlReaderWalker(htmlDoc);
+	if (reader == NULL) {
+		cli_dbgmsg("parseRootMHTML: cannot intialize xmlTextReader\n");
+#if HAVE_JSON
+		ret = cli_json_parse_error(ctx->wrkproperty, "MHTML_ERROR_XML_READER_IO");
+		if (ret != CL_SUCCESS)
+			rc = FAIL;
+#endif
+		blobDestroy(input);
+		return rc;
+	}
+
+	memset(&mxctx, 0, sizeof(mxctx));
+	/* no scanning callback set */
+	mxctx.comment_cb = parseMHTMLComment;
+	ret = cli_msxml_parse_document(ctx, reader, mhtml_keys, num_mhtml_keys, MSXML_FLAG_JSON | MSXML_FLAG_WALK, &mxctx);
+	switch (ret) {
+	case CL_SUCCESS:
+	case CL_ETIMEOUT:
+	case CL_BREAK:
+		rc = OK;
+		break;
+
+	case CL_EMAXREC:
+		rc = MAXREC;
+		break;
+
+	case CL_EMAXFILES:
+		rc = MAXFILES;
+		break;
+
+	case CL_VIRUS:
+		rc = CL_VIRUS;
+		break;
+
+	default:
+		rc = FAIL;
+	}
+
+	xmlTextReaderClose(reader);
+	xmlFreeTextReader(reader);
+	xmlFreeDoc(htmlDoc);
+	blobDestroy(input);
+	return rc;
+#else  /* LIBXML_HTML_ENABLED */
+	UNUSEDPARAM(m);
+	UNUSEDPARAM(t);
+	cli_dbgmsg("in parseRootMHTML\n");
+	cli_dbgmsg("parseRootMHTML: parsing html documents disabled in libxml2!\n");
+#endif /* LIBXML_HTML_ENABLED */
+#else  /* HAVE_LIBXML2 */
+	UNUSEDPARAM(m);
+	UNUSEDPARAM(t);
+	cli_dbgmsg("in parseRootMHTML\n");
+	cli_dbgmsg("parseRootMHTML: parsing html documents requires libxml2!\n");
+
+	return OK;
+#endif /* HAVE_LIBXML2 */
+}
+
 /*
  * This is a recursive routine.
  *
@@ -1066,6 +1328,9 @@ parseEmailBody(message *messageIn, text *textIn, mbox_ctx *mctx, unsigned int re
 	bool infected = FALSE;
 	const struct cl_engine *engine = mctx->ctx->engine;
 	const int doPhishingScan = engine->dboptions&CL_DB_PHISHING_URLS && (DCONF_PHISHING & PHISHING_CONF_ENGINE);
+#if HAVE_JSON
+	json_object *saveobj = mctx->wrkobj;
+#endif
 
 	cli_dbgmsg("in parseEmailBody, %u files saved so far\n",
 		mctx->files);
@@ -1107,6 +1372,17 @@ parseEmailBody(message *messageIn, text *textIn, mbox_ctx *mctx, unsigned int re
 
 		mimeType = messageGetMimeType(mainMessage);
 		mimeSubtype = messageGetMimeSubtype(mainMessage);
+#if HAVE_JSON
+		if (mctx->wrkobj != NULL) {
+			mctx->wrkobj = cli_jsonobj(mctx->wrkobj, "Body");
+			cli_jsonstr(mctx->wrkobj, "MimeType", getMimeTypeStr(mimeType));
+			cli_jsonstr(mctx->wrkobj, "MimeSubtype", mimeSubtype);
+			cli_jsonstr(mctx->wrkobj, "EncodingType", getEncTypeStr(messageGetEncoding(mainMessage)));
+			cli_jsonstr(mctx->wrkobj, "Disposition", messageGetDispositionType(mainMessage));
+			cli_jsonstr(mctx->wrkobj, "Filename", messageHasFilename(mainMessage) ?
+				    messageGetFilename(mainMessage): "(inline)");
+		}
+#endif
 
 		/* pre-process */
 		subtype = tableFind(mctx->subtypeTable, mimeSubtype);
@@ -1164,6 +1440,10 @@ parseEmailBody(message *messageIn, text *textIn, mbox_ctx *mctx, unsigned int re
 			cli_dbgmsg("Content-type 'multipart' handler\n");
 			boundary = messageFindArgument(mainMessage, "boundary");
 
+#if HAVE_JSON
+			cli_jsonstr(mctx->wrkobj, "Boundary", boundary);
+#endif
+
 			if(boundary == NULL) {
 				cli_dbgmsg("Multipart/%s MIME message contains no boundary header\n",
 					mimeSubtype);
@@ -1176,7 +1456,7 @@ parseEmailBody(message *messageIn, text *textIn, mbox_ctx *mctx, unsigned int re
 				break;
 			}
 
-            cli_chomp(boundary);
+			cli_chomp(boundary);
 
 			/* Perhaps it should assume mixed? */
 			if(mimeSubtype[0] == '\0') {
@@ -1457,7 +1737,7 @@ parseEmailBody(message *messageIn, text *textIn, mbox_ctx *mctx, unsigned int re
 						 */
 						while(t_line && next_is_folded_header(t_line)) {
 							const char *data;
-                            size_t datasz;
+							size_t datasz;
 
 							t_line = t_line->t_next;
 
@@ -1476,7 +1756,7 @@ parseEmailBody(message *messageIn, text *textIn, mbox_ctx *mctx, unsigned int re
 								break;
 							}
 
-                            datasz = strlen(fullline) + strlen(data) + 1;
+							datasz = strlen(fullline) + strlen(data) + 1;
 							ptr = cli_realloc(fullline, datasz);
 
 							if(ptr == NULL)
@@ -1610,6 +1890,9 @@ parseEmailBody(message *messageIn, text *textIn, mbox_ctx *mctx, unsigned int re
 				if(aText && (textIn == NULL))
 					textDestroy(aText);
 
+#if HAVE_JSON
+				mctx->wrkobj = saveobj;
+#endif
 				/*
 				 * Nothing to do
 				 */
@@ -1660,6 +1943,11 @@ parseEmailBody(message *messageIn, text *textIn, mbox_ctx *mctx, unsigned int re
 				if(htmltextPart == -1)
 					cli_dbgmsg("No HTML code found to be scanned\n");
 				else {
+#if HAVE_JSON
+					/* Send root HTML file for preclassification */
+					if (mctx->ctx->wrkproperty)
+						parseRootMHTML(mctx, aMessage, aText);
+#endif
 					rc = parseEmailBody(aMessage, aText, mctx, recursion_level + 1);
 					if((rc == OK) && aMessage) {
 						assert(aMessage == messages[htmltextPart]);
@@ -1790,6 +2078,9 @@ parseEmailBody(message *messageIn, text *textIn, mbox_ctx *mctx, unsigned int re
 			if(messages)
 				free(messages);
 
+#if HAVE_JSON
+			mctx->wrkobj = saveobj;
+#endif
 			return rc;
 
 		case MESSAGE:
@@ -1848,6 +2139,9 @@ parseEmailBody(message *messageIn, text *textIn, mbox_ctx *mctx, unsigned int re
 				messageDestroy(mainMessage);
 			if(messages)
 				free(messages);
+#if HAVE_JSON
+			mctx->wrkobj = saveobj;
+#endif
 			return rc;
 
 		default:
@@ -2118,6 +2412,10 @@ parseEmailBody(message *messageIn, text *textIn, mbox_ctx *mctx, unsigned int re
 	if((rc != FAIL) && infected)
 		rc = VIRUS;
 
+#if HAVE_JSON
+	mctx->wrkobj = saveobj;
+#endif
+
 	cli_dbgmsg("parseEmailBody() returning %d\n", (int)rc);
 
 	return rc;
@@ -2137,7 +2435,7 @@ boundaryStart(const char *line, const char *boundary)
 	char buf[RFC2821LENGTH + 1];
     char *newline;
 
-	if(line == NULL)
+	if(line == NULL || *line == '\0')
 		return 0;	/* empty line */
 	if(boundary == NULL)
 		return 0;
@@ -2146,10 +2444,10 @@ boundaryStart(const char *line, const char *boundary)
     if (!(newline))
         newline = (char *)line;
 
-    if (newline != line && strlen(newline)) {
+    if (newline != line && strlen(line)) {
         char *p;
         /* Trim trailing spaces */
-        p = newline + strlen(newline)-1;
+        p = newline + strlen(line);
         while (p >= newline && *p == ' ')
             *(p--) = '\0';
     }
@@ -2261,7 +2559,7 @@ boundaryEnd(const char *line, const char *boundary)
 	size_t len;
     char *newline, *p, *p2;
 
-	if(line == NULL)
+	if(line == NULL || *line == '\0')
 		return 0;
 
     p = newline = strdup(line);
@@ -2270,9 +2568,9 @@ boundaryEnd(const char *line, const char *boundary)
         newline = (char *)line;
     }
 
-    if (newline != line && strlen(newline)) {
+    if (newline != line && strlen(line)) {
         /* Trim trailing spaces */
-        p2 = newline + strlen(newline)-1;
+        p2 = newline + strlen(line);
         while (p2 >= newline && *p2 == ' ')
             *(p2--) = '\0';
     }
@@ -2509,7 +2807,7 @@ parseMimeHeader(message *m, const char *cmd, const table_t *rfc821Table, const c
 
 				buf = cli_malloc(strlen(ptr) + 1);
 				if(buf == NULL) {
-                    cli_errmsg("parseMimeHeader: Unable to allocate memory for buf %lu\n", strlen(ptr) + 1);
+                    cli_errmsg("parseMimeHeader: Unable to allocate memory for buf %llu\n", (long long unsigned)(strlen(ptr) + 1));
 					if(copy)
 						free(copy);
 					return -1;
@@ -2618,7 +2916,7 @@ parseMimeHeader(message *m, const char *cmd, const table_t *rfc821Table, const c
 		case CONTENT_DISPOSITION:
 			buf = cli_malloc(strlen(ptr) + 1);
 			if(buf == NULL) {
-                cli_errmsg("parseMimeHeader: Unable to allocate memory for buf %lu\n", strlen(ptr) + 1);
+                cli_errmsg("parseMimeHeader: Unable to allocate memory for buf %llu\n", (long long unsigned)(strlen(ptr) + 1));
 				if(copy)
 					free(copy);
 				return -1;
@@ -2696,7 +2994,7 @@ rfc822comments(const char *in, char *out)
 	if(out == NULL) {
 		out = cli_malloc(strlen(in) + 1);
 		if(out == NULL) {
-            cli_errmsg("rfc822comments: Unable to allocate memory for out %lu\n", strlen(in) + 1);
+            cli_errmsg("rfc822comments: Unable to allocate memory for out %llu\n", (long long unsigned)(strlen(in) + 1));
 			return NULL;
         }
 	}
@@ -2764,7 +3062,7 @@ rfc2047(const char *in)
 	out = cli_malloc(strlen(in) + 1);
 
 	if(out == NULL) {
-        cli_errmsg("rfc2047: Unable to allocate memory for out %lu\n", strlen(in) + 1);
+        cli_errmsg("rfc2047: Unable to allocate memory for out %llu\n", (long long unsigned)(strlen(in) + 1));
 		return NULL;
     }
 
@@ -3510,6 +3808,36 @@ exportBounceMessage(mbox_ctx *mctx, text *start)
 }
 
 /*
+ * Get string representation of mimetype
+ */
+static	const	char	*getMimeTypeStr(mime_type mimetype)
+{
+	const struct tableinit *entry = mimeTypeStr;
+
+	while (entry->key) {
+		if (mimetype == entry->value)
+			return entry->key;
+		entry++;
+	}
+	return "UNKNOWN";
+}
+
+/*
+ * Get string representation of encoding type
+ */
+static	const	char	*getEncTypeStr(encoding_type enctype)
+{
+	const struct tableinit *entry = encTypeStr;
+
+	while (entry->key) {
+		if (enctype == entry->value)
+			return entry->key;
+		entry++;
+	}
+	return "UNKNOWN";
+}
+
+/*
  * Handle the ith element of a number of multiparts, e.g. multipart/alternative
  */
 static message *
@@ -3522,15 +3850,56 @@ do_multipart(message *mainMessage, message **messages, int i, mbox_status *rc, m
 #endif
 	message *aMessage = messages[i];
 	const int doPhishingScan = mctx->ctx->engine->dboptions&CL_DB_PHISHING_URLS && (DCONF_PHISHING&PHISHING_CONF_ENGINE);
+#if HAVE_JSON
+	const char *mtype = NULL;
+	json_object *thisobj = NULL, *saveobj = mctx->wrkobj;
 
-	if(aMessage == NULL)
+	if (mctx->wrkobj != NULL) {
+		json_object *multiobj = cli_jsonarray(mctx->wrkobj, "Multipart");
+		if (multiobj == NULL) {
+			cli_errmsg("Cannot get multipart preclass array\n");
+			*rc = -1;
+			return mainMessage;
+		}
+
+		thisobj = messageGetJObj(aMessage);
+		if (thisobj == NULL) {
+			cli_errmsg("Cannot get message preclass object\n");
+			*rc = -1;
+			return mainMessage;
+		}
+		if (cli_json_addowner(multiobj, thisobj, NULL, -1) != CL_SUCCESS) {
+			cli_errmsg("Cannot assign message preclass object to multipart preclass array\n");
+			*rc = -1;
+			return mainMessage;
+		}
+	}
+#endif
+
+	if(aMessage == NULL) {
+#if HAVE_JSON
+		if (thisobj != NULL)
+			cli_jsonstr(thisobj, "MimeType", "NULL");
+#endif
 		return mainMessage;
+	}
 
 	if(*rc != OK)
 		return mainMessage;
 
 	cli_dbgmsg("Mixed message part %d is of type %d\n",
 		i, messageGetMimeType(aMessage));
+
+#if HAVE_JSON
+	if (thisobj != NULL) {
+		cli_jsonstr(thisobj, "MimeType", getMimeTypeStr(messageGetMimeType(aMessage)));
+		cli_jsonstr(thisobj, "MimeSubtype", messageGetMimeSubtype(aMessage));
+		cli_jsonstr(thisobj, "EncodingType", getEncTypeStr(messageGetEncoding(aMessage)));
+		cli_jsonstr(thisobj, "Disposition", messageGetDispositionType(aMessage));
+		cli_jsonstr(thisobj, "Filename", messageHasFilename(aMessage) ?
+			    messageGetFilename(aMessage): "(inline)");
+	}
+#endif
 
 	switch(messageGetMimeType(aMessage)) {
 		case APPLICATION:
@@ -3666,6 +4035,9 @@ do_multipart(message *mainMessage, message **messages, int i, mbox_status *rc, m
 			assert(aMessage == messages[i]);
 			messageDestroy(messages[i]);
 			messages[i] = NULL;
+#if HAVE_JSON
+			mctx->wrkobj = thisobj;
+#endif
 			if(body) {
 				messageSetCTX(body, mctx->ctx);
 				*rc = parseEmailBody(body, NULL, mctx, recursion_level + 1);
@@ -3673,6 +4045,9 @@ do_multipart(message *mainMessage, message **messages, int i, mbox_status *rc, m
 					*rc = VIRUS;
 				messageDestroy(body);
 			}
+#if HAVE_JSON
+			mctx->wrkobj = saveobj;
+#endif
 #endif
 			return mainMessage;
 		case MULTIPART:
@@ -3682,6 +4057,9 @@ do_multipart(message *mainMessage, message **messages, int i, mbox_status *rc, m
 			 * be an attachment
 			 */
 			cli_dbgmsg("Found multipart inside multipart\n");
+#if HAVE_JSON
+			mctx->wrkobj = thisobj;
+#endif
 			if(aMessage) {
 				/*
 				 * The headers were parsed when reading in the
@@ -3698,6 +4076,9 @@ do_multipart(message *mainMessage, message **messages, int i, mbox_status *rc, m
 					messageDestroy(mainMessage);
 				mainMessage = NULL;
 			}
+#if HAVE_JSON
+			mctx->wrkobj = saveobj;
+#endif
 			return mainMessage;
 		default:
 			cli_dbgmsg("Only text and application attachments are fully supported, type = %d\n",
@@ -3707,7 +4088,17 @@ do_multipart(message *mainMessage, message **messages, int i, mbox_status *rc, m
 
 	if(*rc != VIRUS) {
 		fileblob *fb = messageToFileblob(aMessage, mctx->dir, 1);
+#if HAVE_JSON
+		json_object *arrobj;
+		int arrlen = 0;
 
+		if (thisobj != NULL) {
+			/* attempt to determine container size - prevents incorrect type reporting */
+			if (json_object_object_get_ex(mctx->ctx->wrkproperty, "ContainedObjects", &arrobj))
+				arrlen = json_object_array_length(arrobj);
+		}
+
+#endif
 		if(fb) {
 			/* aMessage doesn't always have a ctx set */
 			fileblobSetCTX(fb, mctx->ctx);
@@ -3716,6 +4107,24 @@ do_multipart(message *mainMessage, message **messages, int i, mbox_status *rc, m
 			if (!addToText)
 				mctx->files++;
 		}
+#if HAVE_JSON
+		if (thisobj != NULL) {
+			json_object *entry = NULL;
+			const char *dtype = NULL;
+
+			/* attempt to acquire container type */
+			if (json_object_object_get_ex(mctx->ctx->wrkproperty, "ContainedObjects", &arrobj))
+				if (json_object_array_length(arrobj) > arrlen)
+					entry = json_object_array_get_idx(arrobj, arrlen);
+			if (entry) {
+				json_object_object_get_ex(entry, "FileType", &entry);
+				if (entry)
+					dtype = json_object_get_string(entry);
+			}
+			cli_jsonint(thisobj, "ContainedObjectsIndex", arrlen);
+			cli_jsonstr(thisobj, "ClamAVFileType", dtype ? dtype : "UNKNOWN");
+		}
+#endif
 		if(messageContainsVirus(aMessage))
 			*rc = VIRUS;
 	}

@@ -1265,7 +1265,9 @@ int cli_url_canon(const char *inurl, size_t len, char *urlbuff, size_t dest_len,
 	++host_begin;
 
 	/* ignore username in URL */
-	p = strchr(host_begin, '@');
+	while((host_begin < urlend) && *host_begin == '/') ++host_begin;
+	host_len = strcspn(host_begin, ":/?");
+	p = memchr(host_begin, '@', host_len);
 	if (p)
 	    host_begin = p+1;
 	url = host_begin;
@@ -1399,7 +1401,7 @@ static int url_hash_match(const struct regex_matcher *rlist, const char *inurl, 
 		while(k < COMPONENTS+2) {
 			p = strchr(path_begin + pp[k-1] + 1, '/');
 			if(p && p > path_begin) {
-				pp[k++] = p - path_begin;
+				pp[k++] = p - path_begin + 1;
 			} else
 				break;
 		}

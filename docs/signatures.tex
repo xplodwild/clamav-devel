@@ -331,7 +331,12 @@ How do I look in hex?
     as two sub-signatures \verb+aabbcc+ and \verb+bbaacc+ with any number
     of bytes between them. It's a requirement that each sub-signature
     includes a block of two static characters somewhere in its body.
-    
+    Note that there is one exception to this restriction; that is when
+    the range wildcard is of the form \verb+{n}+ with \verb+n<128+. In this
+    case, ClamAV uses an optimization and translates \verb+{n}+ to the string
+    consisting of \verb+n ??+ character wildcards. Character wildcards do not
+    divide hex signatures into two parts and so the two static character
+    requirement does not apply.
 
     \subsubsection{Character classes}
     ClamAV supports the following character classes for hex-signatures:
@@ -395,9 +400,8 @@ MalwareName:TargetType:Offset:HexSignature[:MinFL:[MaxFL]]
     \begin{itemize}
 	\item 0 = any file
 	\item 1 = Portable Executable, both 32- and 64-bit.
-	\item 2 = file inside OLE2 container (e.g. image, embedded executable,
-	VBA script). The OLE2 format is primarily used by MS Office and MSI
-	installation files.
+	\item 2 = OLE2 containers, including their specific macros. The OLE2
+    format is primarily used by MS Office and MSI installation files.
 	\item 3 = HTML (normalized: whitespace transformed to spaces, tags/tag
 	attributes normalized, all lowercase), Javascript is normalized too:
 	all strings are normalized (hex encoding is decoded), numbers are
@@ -459,8 +463,7 @@ Subsig1;Subsig2;...
     \begin{itemize}
 	\item \verb+TargetDescriptionBlock+ provides information about the
 	engine and target file with comma separated \verb+Arg:Val+ pairs,
-	currently (as of 0.95.1) only \verb+Target:X+ and \verb+Engine:X-Y+
-	are supported.
+	requires a minimum and maximum value expressed as \verb+min-max+.
 	\item \verb+LogicalExpression+ specifies the logical expression
 	describing the relationship between \verb+Subsig0...SubsigN+.\\
 	\textbf{Basis clause:} 0,1,...,N decimal indexes are SUB-EXPRESSIONS
@@ -823,7 +826,7 @@ Res1:Res2[:MinFL[:MaxFL]]
 	\item \verb+VirusName:+ Virus name to be displayed when signature matches
 	\item \verb+ContainerType:+ one of \verb+CL_TYPE_ZIP+, \verb+CL_TYPE_RAR+,
 	\verb+CL_TYPE_ARJ+,\\
-	\verb+CL_TYPE_CAB+, \verb+CL_TYPE_7Z+, \verb+CL_TYPE_MAIL+, \verb+CL_TYPE_(POSIX|OLD)_TAR+,\\
+	\verb+CL_TYPE_MSCAB+, \verb+CL_TYPE_7Z+, \verb+CL_TYPE_MAIL+, \verb+CL_TYPE_(POSIX|OLD)_TAR+,\\
 	\verb+CL_TYPE_CPIO_(OLD|ODC|NEWC|CRC)+ or \verb+*+ to match
 	any of the container types listed here
 	\item \verb+ContainerSize:+ size of the container file itself (eg. size of
@@ -937,6 +940,33 @@ Eicar-Test-Signature:bc356bae4c42f19a3de16e333ba3569c
         \item YARA rules in ClamAV must contain at least one literal, hexadecimal, or
         regular expression string.
     \end{itemize}
+    In addition, there are a few more ClamAV processing modes that may affect the outcome of YARA rules.
+    \begin{itemize}
+        \item \emph{File decomposition and decompression} - Since ClamAV uses file decomposition and decompression
+               to find viruses within de-archived and uncompressed inner files, YARA rules executed by ClamAV
+               will match against these files as well.
+        \item \emph{Normalization} - By default, ClamAV normalizes HTML, JavaScript, and ASCII text files.
+              YARA rules in ClamAV will match against the normalized result. The effects of normalization
+              of these file types may be captured using \verb+clamscan --leave-temps --tempdir=mytempdir+. 
+              YARA rules may then be written using the normalized file(s) found in \verb+mytempdir+.
+              Alternatively, starting with ClamAV 0.99.3, \verb+clamscan --normalize=no+ will prevent
+              normalization and only scan the raw file. To obtain similar behavior prior to 0.99.2, use
+              \verb+clamscan --scan-html=no+. The corresponding parameters for clamd.conf are \verb+Normalize+
+              and \verb+ScanHTML+.
+        \item \emph{YARA conditions driven by string matches} - All YARA conditions are driven by string matches in
+              ClamAV. This saves from executing every YARA rule on every file. Any YARA condition may be augmented
+              with a string match clause which is always true, such as:
+        \begin{verbatim}
+          rule CheckFileSize
+          {
+            strings:
+              $abc = "abc"
+            condition:
+              ($abc or not $abc) and filesize < 200KB
+          }
+        \end{verbatim}
+        This will ensure that the YARA condition always performs the desired action (checking the file size in this example),
+    \end{itemize}
 
     \subsection{Passwords for archive files [experimental]}
     ClamAV 0.99 allows for users to specify password attempts for certain password-compatible archives.
@@ -974,7 +1004,7 @@ SignatureName;TargetDescriptionBlock;PWStorageType;Password
     should generate the following files:
     \begin{itemize}
 	\item nocomment.html - the file is normalized, lower-case, with all
-	comments and superflous white space removed
+	comments and superfluous white space removed
 	\item notags.html - as above but with all HTML tags removed
     \end{itemize}
     The code automatically decodes JScript.encode parts and char ref's (e.g.
@@ -984,7 +1014,7 @@ SignatureName;TargetDescriptionBlock;PWStorageType;Password
 
     \subsection{Text files}
     Similarly to HTML all ASCII text files get normalized (converted
-    to lower-case, all superflous white space and control characters removed,
+    to lower-case, all superfluous white space and control characters removed,
     etc.) before scanning. Use \verb+clamscan --leave-temps+ to obtain
     a normalized file then create a signature with the target type 7.
 

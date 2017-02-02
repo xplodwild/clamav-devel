@@ -126,6 +126,8 @@ static const struct ftmap_s {
     { "CL_TYPE_XML_HWP",	CL_TYPE_XML_HWP		},
     { "CL_TYPE_HWPOLE2",	CL_TYPE_HWPOLE2		},
     { "CL_TYPE_OOXML_HWP",	CL_TYPE_OOXML_HWP	},
+    { "CL_TYPE_PS",		CL_TYPE_PS		},
+    { "CL_TYPE_MHTML",		CL_TYPE_MHTML		},
     { NULL,			CL_TYPE_IGNORED		}
 };
 
@@ -226,6 +228,7 @@ const struct ooxml_ftcodes {
     { "mimetype",                8, CL_TYPE_ZIP         }, /* HWP */
     { "Contents",                8, CL_TYPE_ZIP         }, /* HWP */
     { "docProps/",               9, CL_TYPE_ZIP         }, /* MS */
+    { "customXml/",             10, CL_TYPE_ZIP         }, /* MS */
     { "version.xml",            11, CL_TYPE_ZIP         }, /* HWP */
     { "settings.xml",           12, CL_TYPE_ZIP         }, /* HWP */
     { "_.rels/.rels",           12, CL_TYPE_ZIP         }, /* MS */

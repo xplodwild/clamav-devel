@@ -134,9 +134,9 @@ static inline void PROFILE_REPORT(const struct cli_hashtable *s)
 	size_t lookups, queries, insert_tries, inserts;
 	cli_dbgmsg("--------Hashtable usage report for %p--------------\n",(const void*)s);
 	cli_dbgmsg("hash function calculations:%ld\n",s->PROFILE_STRUCT.calc_hash);
-	cli_dbgmsg("successfull finds/total searches: %ld/%ld; lookups: %ld\n", s->PROFILE_STRUCT.found, s->PROFILE_STRUCT.find_req, s->PROFILE_STRUCT.found_tries);
-	cli_dbgmsg("unsuccessfull finds/total searches: %ld/%ld; lookups: %ld\n", s->PROFILE_STRUCT.not_found, s->PROFILE_STRUCT.find_req , s->PROFILE_STRUCT.not_found_tries);
-	cli_dbgmsg("successfull finds during grow:%ld; lookups: %ld\n",s->PROFILE_STRUCT.grow_found, s->PROFILE_STRUCT.grow_found_tries);
+	cli_dbgmsg("successful finds/total searches: %ld/%ld; lookups: %ld\n", s->PROFILE_STRUCT.found, s->PROFILE_STRUCT.find_req, s->PROFILE_STRUCT.found_tries);
+	cli_dbgmsg("unsuccessful finds/total searches: %ld/%ld; lookups: %ld\n", s->PROFILE_STRUCT.not_found, s->PROFILE_STRUCT.find_req , s->PROFILE_STRUCT.not_found_tries);
+	cli_dbgmsg("successful finds during grow:%ld; lookups: %ld\n",s->PROFILE_STRUCT.grow_found, s->PROFILE_STRUCT.grow_found_tries);
 	lookups = s->PROFILE_STRUCT.found_tries + s->PROFILE_STRUCT.not_found_tries + s->PROFILE_STRUCT.grow_found_tries;
 	queries = s->PROFILE_STRUCT.find_req + s->PROFILE_STRUCT.grow_found;
 	cli_dbgmsg("Find Lookups/total queries: %ld/%ld = %3f\n", lookups, queries, lookups*1.0/queries);
@@ -330,9 +330,9 @@ static int cli_hashtab_grow(struct cli_hashtable *s)
 	struct cli_element* htable;
 	size_t i,idx, used = 0;
 
-	cli_dbgmsg("hashtab.c: new capacity: %lu\n",new_capacity);
+	cli_dbgmsg("hashtab.c: new capacity: %llu\n",(long long unsigned)new_capacity);
 	if(new_capacity == s->capacity) {
-		cli_errmsg("hashtab.c: capacity problem growing from: %lu\n",s->capacity);
+		cli_errmsg("hashtab.c: capacity problem growing from: %llu\n",(long long unsigned)s->capacity);
 		return CL_EMEM;
 	}
 	htable = cli_calloc(new_capacity, sizeof(*s->htable));
@@ -373,7 +373,7 @@ static int cli_hashtab_grow(struct cli_hashtable *s)
 	s->used = used;
 	s->capacity = new_capacity;
 	s->maxfill = new_capacity*8/10;
-	cli_dbgmsg("Table %p size after grow:%ld\n",(void*)s,s->capacity);
+	cli_dbgmsg("Table %p size after grow:%llu\n",(void*)s,(long long unsigned)s->capacity);
 	PROFILE_GROW_DONE(s);
 	return CL_SUCCESS;
 }
@@ -387,7 +387,7 @@ static int cli_htu32_grow(struct cli_htu32 *s, mpool_t *mempool)
 	const size_t new_capacity = nearest_power(s->capacity + 1);
 	struct cli_htu32_element* htable = mpool_calloc(mempool, new_capacity, sizeof(*s->htable));
 	size_t i,idx, used = 0;
-	cli_dbgmsg("hashtab.c: new capacity: %lu\n",new_capacity);
+	cli_dbgmsg("hashtab.c: new capacity: %llu\n",(long long unsigned)new_capacity);
 	if(new_capacity == s->capacity || !htable)
 		return CL_EMEM;
 
@@ -423,7 +423,7 @@ static int cli_htu32_grow(struct cli_htu32 *s, mpool_t *mempool)
 	s->used = used;
 	s->capacity = new_capacity;
 	s->maxfill = new_capacity*8/10;
-	cli_dbgmsg("Table %p size after grow:%ld\n",(void*)s,s->capacity);
+	cli_dbgmsg("Table %p size after grow:%llu\n",(void*)s,(long long unsigned)s->capacity);
 	PROFILE_GROW_DONE(s);
 	return CL_SUCCESS;
 }
@@ -438,7 +438,7 @@ const struct cli_element* cli_hashtab_insert(struct cli_hashtable *s, const char
 	if(!s)
 		return NULL;
 	if(s->used > s->maxfill) {
-		cli_dbgmsg("hashtab.c:Growing hashtable %p, because it has exceeded maxfill, old size:%ld\n",(void*)s,s->capacity);
+		cli_dbgmsg("hashtab.c:Growing hashtable %p, because it has exceeded maxfill, old size:%llu\n",(void*)s,(long long unsigned)s->capacity);
 		cli_hashtab_grow(s);
 	}
 	do {
@@ -487,7 +487,7 @@ const struct cli_element* cli_hashtab_insert(struct cli_hashtable *s, const char
 		} while (tries <= s->capacity);
 		/* no free place found*/
 		PROFILE_HASH_EXHAUSTED(s);
-		cli_dbgmsg("hashtab.c: Growing hashtable %p, because its full, old size:%ld.\n",(void*)s,s->capacity);
+		cli_dbgmsg("hashtab.c: Growing hashtable %p, because its full, old size:%llu.\n",(void*)s,(long long unsigned)s->capacity);
 	} while( cli_hashtab_grow(s) >= 0 );
 	cli_warnmsg("hashtab.c: Unable to grow hashtable\n");
 	return NULL;
@@ -505,7 +505,7 @@ int cli_htu32_insert(struct cli_htu32 *s, const struct cli_htu32_element *item, 
 	if(!s)
 		return CL_ENULLARG;
 	if(s->used > s->maxfill) {
-		cli_dbgmsg("hashtab.c:Growing hashtable %p, because it has exceeded maxfill, old size:%ld\n",(void*)s,s->capacity);
+		cli_dbgmsg("hashtab.c:Growing hashtable %p, because it has exceeded maxfill, old size:%llu\n",(void*)s,(long long unsigned)s->capacity);
 		cli_htu32_grow(s, mempool);
 	}
 	do {
@@ -544,7 +544,7 @@ int cli_htu32_insert(struct cli_htu32 *s, const struct cli_htu32_element *item, 
 		} while (tries <= s->capacity);
 		/* no free place found*/
 		PROFILE_HASH_EXHAUSTED(s);
-		cli_dbgmsg("hashtab.c: Growing hashtable %p, because its full, old size:%ld.\n",(void*)s,s->capacity);
+		cli_dbgmsg("hashtab.c: Growing hashtable %p, because its full, old size:%llu.\n",(void*)s,(long long unsigned)s->capacity);
 	} while( (ret = cli_htu32_grow(s, mempool)) >= 0 );
 	cli_warnmsg("hashtab.c: Unable to grow hashtable\n");
 	return ret;
@@ -633,11 +633,12 @@ int cli_hashtab_generate_c(const struct cli_hashtable *s,const char* name)
 		else if(e->key == DELETED_KEY)
 			printf("\t{DELETED_KEY,0,0},\n");
 		else
-			printf("\t{\"%s\", %ld, %ld},\n", e->key, e->data, e->len);
+			printf("\t{\"%s\", %ld, %llu},\n", e->key, e->data, (long long unsigned)e->len);
 	}
 	printf("};\n");
 	printf("const struct cli_hashtable %s = {\n",name);
-	printf("\t%s_elements, %ld, %ld, %ld", name, s->capacity, s->used, s->maxfill);
+	printf("\t%s_elements, %llu, %llu, %llu", name, (long long unsigned)s->capacity,
+	       (long long unsigned)s->used, (long long unsigned)s->maxfill);
 	printf("\n};\n");
 
 	PROFILE_REPORT(s);
@@ -738,7 +739,7 @@ static inline size_t cli_hashset_search(const struct cli_hashset* hs, const uint
 	size_t idx = hash32shift(key) & (hs->mask);
 	size_t tries = 1;
 
-	/* check wether the entry is used, and if the key matches */
+	/* check whether the entry is used, and if the key matches */
 	while(BITMAP_CONTAINS(hs->bitmap, idx) && (hs->keys[idx] != key)) {
 		/* entry used, key different -> collision */
 		idx = (idx + tries++)&(hs->mask);

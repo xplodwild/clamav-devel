@@ -604,7 +604,10 @@ remote_cvdhead (const char *cvdfile, const char *localfile,
     }
     else
     {
-        logg ("*Connected to %s (IP: %s).\n", hostname, ipaddr);
+        if (proxy)
+            logg ("*Connected to %s.\n", hostname);
+        else
+            logg ("*Connected to %s (IP: %s).\n", hostname, ipaddr);
         logg ("*Trying to retrieve CVD header of http://%s/%s\n", hostname,
               cvdfile);
     }
@@ -798,8 +801,11 @@ getfile_mirman (const char *srcfile, const char *destfile,
     if (authorization)
         free (authorization);
 
-    logg ("*Trying to download http://%s/%s (IP: %s)\n", hostname, srcfile,
-          ipaddr);
+    if (proxy)
+        logg ("*Trying to download http://%s/%s\n", hostname, srcfile);
+    else
+        logg ("*Trying to download http://%s/%s (IP: %s)\n", hostname, srcfile,
+              ipaddr);
 
     if (ip && !ip[0])
         strcpy (ip, ipaddr);
@@ -824,7 +830,10 @@ getfile_mirman (const char *srcfile, const char *destfile,
         if ((i >= sizeof (buffer) - 1) || recv (sd, buffer + i, 1, 0) == -1)
         {
 #endif
-            logg ("%cgetfile: Error while reading database from %s (IP: %s): %s\n", logerr ? '!' : '^', hostname, ipaddr, strerror (errno));
+            if (proxy)
+                logg ("%cgetfile: Error while reading database from %s: %s\n", logerr ? '!' : '^', hostname, strerror (errno));
+            else
+                logg ("%cgetfile: Error while reading database from %s (IP: %s): %s\n", logerr ? '!' : '^', hostname, ipaddr, strerror (errno));
             if (mdat)
                 mirman_update (mdat->currip, mdat->af, mdat, 1);
             return FCE_CONNECTION;
@@ -846,8 +855,12 @@ getfile_mirman (const char *srcfile, const char *destfile,
     if ((strstr (buffer, "HTTP/1.1 404")) != NULL
         || (strstr (buffer, "HTTP/1.0 404")) != NULL)
     {
-        logg ("^getfile: %s not found on remote server (IP: %s)\n", srcfile,
-              ipaddr);
+        if (proxy)
+            logg ("^getfile: %s not found on %s\n", srcfile, hostname);
+        else
+            logg ("^getfile: %s not found on %s (IP: %s)\n", srcfile, hostname,
+                  ipaddr);
+
         if (mdat)
             mirman_update (mdat->currip, mdat->af, mdat, 2);
         return FCE_FAILEDGET;
@@ -865,8 +878,12 @@ getfile_mirman (const char *srcfile, const char *destfile,
         && !strstr (buffer, "HTTP/1.1 206")
         && !strstr (buffer, "HTTP/1.0 206"))
     {
-        logg ("%cgetfile: Unknown response from remote server (IP: %s)\n",
-              logerr ? '!' : '^', ipaddr);
+        if (proxy)
+            logg ("%cgetfile: Unknown response from %s\n",
+                  logerr ? '!' : '^', hostname);
+        else
+            logg ("%cgetfile: Unknown response from %s (IP: %s)\n",
+                  logerr ? '!' : '^', hostname, ipaddr);
         if (mdat)
             mirman_update (mdat->currip, mdat->af, mdat, 1);
         return FCE_FAILEDGET;
@@ -930,7 +947,7 @@ getfile_mirman (const char *srcfile, const char *destfile,
             percentage = (int) (100 * (float) totaldownloaded / totalsize);
 
 #ifdef HAVE_UNISTD_H
-        if (!mprintf_quiet && isatty(fileno(stdout)))
+        if (!mprintf_quiet && (mprintf_progress || isatty(fileno(stdout))))
 #else
         if (!mprintf_quiet)
 #endif
@@ -952,8 +969,12 @@ getfile_mirman (const char *srcfile, const char *destfile,
 
     if (bread == -1)
     {
-        logg ("%cgetfile: Download interrupted: %s (IP: %s)\n",
-              logerr ? '!' : '^', strerror (errno), ipaddr);
+        if (proxy)
+            logg ("%cgetfile: Download interrupted: %s (Host: %s)\n",
+                  logerr ? '!' : '^', strerror (errno), hostname);
+        else
+            logg ("%cgetfile: Download interrupted: %s (IP: %s)\n",
+                  logerr ? '!' : '^', strerror (errno), ipaddr);
         if (mdat)
             mirman_update (mdat->currip, mdat->af, mdat, 2);
         return FCE_CONNECTION;
@@ -1027,6 +1048,7 @@ getcvd (const char *cvdfile, const char *newfile, const char *hostname,
 {
     struct cl_cvd *cvd;
     int ret;
+    char *newfile2;
 
 
     logg ("*Retrieving http://%s/%s\n", hostname, cvdfile);
@@ -1042,19 +1064,49 @@ getcvd (const char *cvdfile, const char *newfile, const char *hostname,
         return ret;
     }
 
-    if ((ret = cl_cvdverify (newfile)))
+    /* bb#10983 - temporaily rename newfile to correct extension for verification */
+    newfile2 = strdup (newfile);
+    if (!newfile2)
+    {
+        logg ("!Can't allocate memory for filename!\n");
+        unlink (newfile);
+        return FCE_MEM;
+    }
+    strncpy(newfile2 + strlen (newfile2) - 4, cvdfile + strlen (cvdfile) - 4, 4);
+    if (rename (newfile, newfile2) == -1)
+    {
+        logg ("!Can't rename %s to %s: %s\n", newfile, newfile2,
+              strerror (errno));
+        unlink (newfile);
+        free(newfile2);
+        return FCE_DBDIRACCESS;
+    }
+
+    if ((ret = cl_cvdverify (newfile2)))
     {
         logg ("!Verification: %s\n", cl_strerror (ret));
-        unlink (newfile);
+        unlink (newfile2);
+        free(newfile2);
         return FCE_BADCVD;
     }
 
-    if (!(cvd = cl_cvdhead (newfile)))
+    if (!(cvd = cl_cvdhead (newfile2)))
     {
         logg ("!Can't read CVD header of new %s database.\n", cvdfile);
-        unlink (newfile);
+        unlink (newfile2);
+        free(newfile2);
         return FCE_BADCVD;
     }
+
+    if (rename (newfile2, newfile) == -1)
+    {
+        logg ("!Can't rename %s to %s: %s\n", newfile2, newfile,
+              strerror (errno));
+        unlink (newfile2);
+        free(newfile2);
+        return FCE_DBDIRACCESS;
+    }
+    free(newfile2);
 
     if (cvd->version < newver)
     {
@@ -1694,7 +1746,7 @@ updatedb (const char *dbname, const char *hostname, char *ip, int *signo,
     struct cl_cvd *current, *remote;
     const struct optstruct *opt;
     unsigned int nodb = 0, currver = 0, newver = 0, port = 0, i, j;
-    int ret, ims = -1, hascld = 0, field = 0;
+    int ret, ims = -1, iscld = 0, field = 0;
     char *pt, cvdfile[32], cldfile[32], localname[32], *tmpdir =
         NULL, *newfile, *newfile2, newdb[32];
     char extradbinfo[256], *extradnsreply = NULL, squery[256];
@@ -1861,14 +1913,14 @@ updatedb (const char *dbname, const char *hostname, char *ip, int *signo,
                                 proxy, port, user, pass, uas, &ims, ctimeout,
                                 rtimeout, mdat, logerr, can_whitelist,
                                 attempt);
-            if (remote)
-                hascld = 1;
-            else
+            if (!remote) {
+                iscld = -1;
                 remote =
                     remote_cvdhead (cvdfile, localname, hostname, ip, localip,
                                     proxy, port, user, pass, uas, &ims,
                                     ctimeout, rtimeout, mdat, logerr,
                                     can_whitelist, attempt);
+            }
         }
         else
             remote =
@@ -1896,8 +1948,11 @@ updatedb (const char *dbname, const char *hostname, char *ip, int *signo,
 
         if (!remote)
         {
-            logg ("^Can't read %s header from %s (IP: %s)\n", cvdfile,
-                  hostname, ip);
+            if (proxy)
+                logg ("^Can't read %s header from %s\n", cvdfile, hostname);
+            else
+                logg ("^Can't read %s header from %s (IP: %s)\n", cvdfile,
+                      hostname, ip);
 #ifdef HAVE_RESOLV_H
             if (mirror_stats && strlen (ip))
             {
@@ -1951,16 +2006,18 @@ updatedb (const char *dbname, const char *hostname, char *ip, int *signo,
         if (optget (opts, "PrivateMirror")->enabled)
         {
             ret = 0;
-            if (hascld)
+            if (iscld >= 0)
                 ret =
                     getcvd (cldfile, newfile, hostname, ip, localip, proxy,
                             port, user, pass, uas, newver, ctimeout, rtimeout,
                             mdat, logerr, can_whitelist, opts, attempt);
-            if (ret || !hascld)
+            if (ret || iscld < 0)
                 ret =
                     getcvd (cvdfile, newfile, hostname, ip, localip, proxy,
                             port, user, pass, uas, newver, ctimeout, rtimeout,
                             mdat, logerr, can_whitelist, opts, attempt);
+            else
+                iscld = 1;
         }
         else
         {
@@ -1985,7 +2042,10 @@ updatedb (const char *dbname, const char *hostname, char *ip, int *signo,
             free (newfile);
             return ret;
         }
-        snprintf (newdb, sizeof (newdb), "%s.cvd", dbname);
+        if (iscld > 0)
+            snprintf (newdb, sizeof (newdb), "%s.cld", dbname);
+        else
+            snprintf (newdb, sizeof (newdb), "%s.cvd", dbname);
 
     }
     else
@@ -2154,7 +2214,7 @@ updatedb (const char *dbname, const char *hostname, char *ip, int *signo,
         if (unlink (localname))
             logg ("^Can't unlink the old database file %s. Please remove it manually.\n", localname);
 
-    if (!optget (opts, "ScriptedUpdates")->enabled)
+    if (!optget (opts, "ScriptedUpdates")->enabled && !optget (opts, "PrivateMirror")->enabled)
     {
         snprintf (localname, sizeof (localname), "%s.cld", dbname);
         if (!access (localname, R_OK))
@@ -2205,8 +2265,8 @@ updatecustomdb (const char *url, int *signo, const struct optstruct *opts,
 
     if (strlen (url) > sizeof (urlcpy) - 1)
     {
-        logg ("!DatabaseCustomURL: URL must be shorter than %lu\n",
-              sizeof (urlcpy));
+        logg ("!DatabaseCustomURL: URL must be shorter than %llu\n",
+              (long long unsigned)sizeof (urlcpy));
         return FCE_FAILEDUPDATE;
     }
 
@@ -2288,6 +2348,7 @@ updatecustomdb (const char *url, int *signo, const struct optstruct *opts,
     }
     else if (!strncasecmp (url, "file://", 7))
     {
+        time_t dbtime, rtime;
         rpath = &url[7];
 #ifdef _WIN32
         dbname = strrchr (rpath, '\\');
@@ -2300,12 +2361,24 @@ updatecustomdb (const char *url, int *signo, const struct optstruct *opts,
             return FCE_FAILEDUPDATE;
         }
 
+        if (CLAMSTAT (rpath, &sb) == -1)
+        {
+	    logg ("DatabaseCustomURL: file %s missing\n", rpath);
+	    return FCE_FAILEDUPDATE;
+        }
+        rtime = sb.st_mtime;
+        dbtime = (CLAMSTAT (dbname, &sb) != -1) ? sb.st_mtime : 0;
+        if (dbtime > rtime)
+        {
+            logg ("%s is up to date (version: custom database)\n", dbname);
+            return FC_UPTODATE;
+        }
+
         newfile = cli_gentemp (updtmpdir);
         if (!newfile)
             return FCE_FAILEDUPDATE;
 
         /* FIXME: preserve file permissions, calculate % */
-        logg ("Downloading %s [  0%%]\r", dbname);
         if (cli_filecopy (rpath, newfile) == -1)
         {
             logg ("DatabaseCustomURL: Can't copy file %s into database directory\n", rpath);
@@ -2760,6 +2833,12 @@ downloadmanager (const struct optstruct *opts, const char *hostname,
         {
             char *cmd = strdup (opt->strarg);
 
+            if (!cmd)
+            {
+                free (newver);
+                return FCE_MEM;
+            }
+
             if ((pt = newver))
             {
                 while (*pt)
@@ -2797,6 +2876,11 @@ downloadmanager (const struct optstruct *opts, const char *hostname,
                 free (cmd);
                 cmd = strdup (buffer);
                 free (buffer);
+                if (!cmd)
+                {
+                    free (newver);
+                    return FCE_MEM;
+                }
             }
 
             if (newver)
@@ -2809,5 +2893,5 @@ downloadmanager (const struct optstruct *opts, const char *hostname,
     if (newver)
         free (newver);
 
-    return 0;
+    return updated ? 0 : FC_UPTODATE;
 }

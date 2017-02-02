@@ -46,6 +46,7 @@
 #include "clamav.h"
 #include "fmap.h"
 #include "str.h"
+#include "conv.h"
 #include "others.h"
 #include "scanners.h"
 #include "msxml_parser.h"
@@ -79,7 +80,7 @@
 typedef int (*hwp_cb )(void *cbdata, int fd, cli_ctx *ctx);
 static int decompress_and_callback(cli_ctx *ctx, fmap_t *input, off_t at, size_t len, const char *parent, hwp_cb cb, void *cbdata)
 {
-    int zret, ofd, ret = CL_SUCCESS;
+    int zret, ofd, in, ret = CL_SUCCESS;
     off_t off_in = at;
     size_t count, remain = 1, outsize = 0;
     z_stream zstrm;
@@ -119,27 +120,27 @@ static int decompress_and_callback(cli_ctx *ctx, fmap_t *input, off_t at, size_t
     do {
         if (zstrm.avail_in == 0) {
             zstrm.next_in = inbuf;
-            ret = fmap_readn(input, inbuf, off_in, FILEBUFF);
-            if (ret < 0) {
+            in = fmap_readn(input, inbuf, off_in, FILEBUFF);
+            if (in < 0) {
                 cli_errmsg("%s: Error reading stream\n", parent);
                 ret = CL_EUNPACK;
                 goto dc_end;
             }
-            if (!ret)
+            if (!in)
                 break;
 
             if (len) {
-                if (remain < ret)
-                    ret = remain;
-                remain -= ret;
+                if (remain < in)
+                    in = remain;
+                remain -= in;
             }
-            zstrm.avail_in = ret;
-            off_in += ret;
+            zstrm.avail_in = in;
+            off_in += in;
         }
         zret = inflate(&zstrm, Z_SYNC_FLUSH);
         count = FILEBUFF - zstrm.avail_out;
         if (count) {
-            if (cli_checklimits("HWP", ctx, outsize + count, 0, 0) != CL_SUCCESS)
+            if ((ret = cli_checklimits("HWP", ctx, outsize + count, 0, 0)) != CL_SUCCESS)
                 break;
 
             if (cli_writen(ofd, outbuf, count) != count) {
@@ -153,6 +154,8 @@ static int decompress_and_callback(cli_ctx *ctx, fmap_t *input, off_t at, size_t
         zstrm.avail_out = FILEBUFF;
     } while(zret == Z_OK && remain);
 
+    cli_dbgmsg("%s: Decompressed %llu bytes to %s\n", parent, (long long unsigned)outsize, tmpname);
+
     /* post inflation checks */
     if (zret != Z_STREAM_END && zret != Z_OK) {
         if (outsize == 0) {
@@ -163,19 +166,27 @@ static int decompress_and_callback(cli_ctx *ctx, fmap_t *input, off_t at, size_t
 
         cli_infomsg(ctx, "%s: Error decompressing stream. Scanning what was decompressed.\n", parent);
     }
-    if (len && remain > 0)
-        cli_infomsg(ctx, "%s: Error decompressing stream. Not all requested input was converted\n", parent);
 
-    cli_dbgmsg("%s: Decompressed %llu bytes to %s\n", parent, (long long unsigned)outsize, tmpname);
+    /* check for limits exceeded or zlib failure */
+    if (ret == CL_SUCCESS && (zret == Z_STREAM_END || zret == Z_OK)) {
+        if (len && remain > 0)
+            cli_infomsg(ctx, "%s: Error decompressing stream. Not all requested input was converted\n", parent);
 
-    /* scanning inflated stream */
-    ret = cb(cbdata, ofd, ctx);
+        /* scanning inflated stream */
+        ret = cb(cbdata, ofd, ctx);
+    } else {
+        /* default to scanning what we got */
+        ret = cli_magic_scandesc(ofd, ctx);
+    }
 
     /* clean-up */
  dc_end:
     zret = inflateEnd(&zstrm);
-    if (zret != Z_OK)
-        ret = CL_EUNPACK;
+    if (zret != Z_OK) {
+        cli_errmsg("%s: Error closing zlib inflation stream\n", parent);
+        if (ret == CL_SUCCESS)
+            ret = CL_EUNPACK;
+    }
     close(ofd);
     if (!ctx->engine->keeptmp)
         if (cli_unlink(tmpname))
@@ -242,11 +253,23 @@ static char *convert_hstr_to_utf8(const char *begin, size_t sz, const char *pare
 #endif
     /* safety base64 encoding */
     if (!res && (rc == CL_SUCCESS)) {
-        res = (char *)cl_base64_encode((const uint8_t *)begin, sz);
-        if (res)
-            rc = CL_VIRUS; /* used as placeholder */
-        else
+        char *tmpbuf;
+
+        tmpbuf = cli_calloc(1, sz+1);
+        if (tmpbuf) {
+            memcpy(tmpbuf, begin, sz);
+
+            res = (char *)cl_base64_encode(tmpbuf, sz);
+            if (res)
+                rc = CL_VIRUS; /* used as placeholder */
+            else
+                rc = CL_EMEM;
+
+            free(tmpbuf);
+        } else {
+            cli_errmsg("%s: Failed to allocate memory for temporary buffer\n", parent);
             rc = CL_EMEM;
+        }
     }
 
     (*ret) = rc;
@@ -271,8 +294,8 @@ int cli_scanhwpole2(cli_ctx *ctx)
     else
         cli_dbgmsg("HWPOLE2: Matched uncompressed prefix and size: %u == %u\n", usize, asize);
 
-    return cli_map_scandesc(map, 4, map->len, ctx, CL_TYPE_ANY);
-    //return cli_map_scandesc(map, 4, map->len, ctx, CL_TYPE_OLE2);
+    return cli_map_scandesc(map, 4, 0, ctx, CL_TYPE_ANY);
+    //return cli_map_scandesc(map, 4, 0, ctx, CL_TYPE_OLE2);
 }
 
 /*** HWP5 ***/
@@ -350,8 +373,6 @@ int cli_hwp5header(cli_ctx *ctx, hwp5_header_t *hwp5)
 
 static int hwp5_cb(void *cbdata, int fd, cli_ctx *ctx)
 {
-    int ret;
-
     if (fd < 0 || !ctx)
         return CL_ENULLARG;
 
@@ -360,60 +381,62 @@ static int hwp5_cb(void *cbdata, int fd, cli_ctx *ctx)
 
 int cli_scanhwp5_stream(cli_ctx *ctx, hwp5_header_t *hwp5, char *name, int fd)
 {
-    hwp5_debug("HWP5.x: NAME: %s\n", name);
+    hwp5_debug("HWP5.x: NAME: %s\n", name ? name : "(NULL)");
 
     if (fd < 0) {
         cli_errmsg("HWP5.x: Invalid file descriptor argument\n");
         return CL_ENULLARG;
     }
 
-    /* encrypted and compressed streams */
-    if (!strncmp(name, "bin", 3) || !strncmp(name, "jscriptversion", 14) ||
-        !strncmp(name, "defaultjscript", 14) || !strncmp(name, "section", 7) ||
-        !strncmp(name, "viewtext", 8) || !strncmp(name, "docinfo", 7)) {
+    if (name) {
+        /* encrypted and compressed streams */
+        if (!strncmp(name, "bin", 3) || !strncmp(name, "jscriptversion", 14) ||
+            !strncmp(name, "defaultjscript", 14) || !strncmp(name, "section", 7) ||
+            !strncmp(name, "viewtext", 8) || !strncmp(name, "docinfo", 7)) {
 
-        if (hwp5->flags & HWP5_PASSWORD) {
-            cli_dbgmsg("HWP5.x: Password encrypted stream, scanning as-is\n");
-            return cli_magic_scandesc(fd, ctx);
-        }
-
-        if (hwp5->flags & HWP5_COMPRESSED) {
-            /* DocInfo JSON Handling */
-            STATBUF statbuf;
-            fmap_t *input;
-            int ret;
-
-            hwp5_debug("HWP5.x: Sending %s for decompress and scan\n", name);
-
-            /* fmap the input file for easier manipulation */
-            if (FSTAT(fd, &statbuf) == -1) {
-                cli_errmsg("HWP5.x: Can't stat file descriptor\n");
-                return CL_ESTAT;
+            if (hwp5->flags & HWP5_PASSWORD) {
+                cli_dbgmsg("HWP5.x: Password encrypted stream, scanning as-is\n");
+                return cli_magic_scandesc(fd, ctx);
             }
 
-            input = fmap(fd, 0, statbuf.st_size);
-            if (!input) {
-                cli_errmsg("HWP5.x: Failed to get fmap for input stream\n");
-                return CL_EMAP;
+            if (hwp5->flags & HWP5_COMPRESSED) {
+                /* DocInfo JSON Handling */
+                STATBUF statbuf;
+                fmap_t *input;
+                int ret;
+
+                hwp5_debug("HWP5.x: Sending %s for decompress and scan\n", name);
+
+                /* fmap the input file for easier manipulation */
+                if (FSTAT(fd, &statbuf) == -1) {
+                    cli_errmsg("HWP5.x: Can't stat file descriptor\n");
+                    return CL_ESTAT;
+                }
+
+                input = fmap(fd, 0, statbuf.st_size);
+                if (!input) {
+                    cli_errmsg("HWP5.x: Failed to get fmap for input stream\n");
+                    return CL_EMAP;
+                }
+                ret = decompress_and_callback(ctx, input, 0, 0, "HWP5.x", hwp5_cb, NULL);
+                funmap(input);
+                return ret;
             }
-            ret = decompress_and_callback(ctx, input, 0, 0, "HWP5.x", hwp5_cb, NULL);
-            funmap(input);
-            return ret;
         }
-    }
 
 #if HAVE_JSON
-    /* JSON Output Summary Information */
-    if (ctx->options & CL_SCAN_FILE_PROPERTIES && ctx->properties != NULL) {
-        if (name && !strncmp(name, "_5_hwpsummaryinformation", 24)) {
-            cli_dbgmsg("HWP5.x: Detected a '_5_hwpsummaryinformation' stream\n");
-            /* JSONOLE2 - what to do if something breaks? */
-            if (cli_ole2_summary_json(ctx, fd, 2) == CL_ETIMEOUT)
-                return CL_ETIMEOUT;
+        /* JSON Output Summary Information */
+        if (ctx->options & CL_SCAN_FILE_PROPERTIES && ctx->properties != NULL) {
+            if (name && !strncmp(name, "_5_hwpsummaryinformation", 24)) {
+                cli_dbgmsg("HWP5.x: Detected a '_5_hwpsummaryinformation' stream\n");
+                /* JSONOLE2 - what to do if something breaks? */
+                if (cli_ole2_summary_json(ctx, fd, 2) == CL_ETIMEOUT)
+                    return CL_ETIMEOUT;
+            }
         }
-    }
 
 #endif
+    }
 
     /* normal streams */
     return cli_magic_scandesc(fd, ctx);
@@ -1013,7 +1036,7 @@ static inline int parsehwp3_paragraph(cli_ctx *ctx, fmap_t *map, int p, int leve
 
                     hwp3_debug("HWP3.x: Paragraph[%d, %d]: box object contains %u cell(s)\n", level, p, ncells);
 
-                    /* cell informations (27 bytes x ncells(offset 80 of table)) */
+                    /* cell information (27 bytes x ncells(offset 80 of table)) */
                     hwp3_debug("HWP3.x: Paragraph[%d, %d]: box cell info array starts @ %llu\n", level, p, (long long unsigned)offset);
                     offset += (27 * ncells);
 
@@ -1153,9 +1176,9 @@ static inline int parsehwp3_paragraph(cli_ctx *ctx, fmap_t *map, int p, int leve
                         return ret;
                     break;
                 }
-            case 17: /* footnote/North America??? */
+            case 17: /* footnote/endnote */
                 {
-                    hwp3_debug("HWP3.x: Detected hidden description marker @ offset %llu\n", (long long unsigned)offset);
+                    hwp3_debug("HWP3.x: Detected footnote/endnote marker @ offset %llu\n", (long long unsigned)offset);
 
                     /*
                      * offset 0 (2 bytes) - special character ID
@@ -1172,6 +1195,13 @@ static inline int parsehwp3_paragraph(cli_ctx *ctx, fmap_t *map, int p, int leve
                     HWP3_PSPECIAL_VERIFY(map, offset, 6, content, match);
 
                     offset += 22;
+
+                    /* content paragraph list */
+                    hwp3_debug("HWP3.x: Paragraph[%d, %d]: footnote/endnote paragraph list starts @ %llu\n", level, p, (long long unsigned)offset);
+                    l = 0;
+                    while (!l && ((ret = parsehwp3_paragraph(ctx, map, sp++, level+1, &offset, &l)) == CL_SUCCESS));
+                    if (ret != CL_SUCCESS)
+                        return ret;
                     break;
                 }
             case 18: /* paste code number */
@@ -1466,16 +1496,22 @@ static inline int parsehwp3_infoblk_1(cli_ctx *ctx, fmap_t *dmap, off_t *offset,
     long long unsigned infoloc = (long long unsigned)(*offset);
     char field[HWP3_FIELD_LENGTH];
 #if HAVE_JSON
-    json_object *infoblk_1, *counter, *entry;
+    json_object *infoblk_1, *contents, *counter, *entry;
 #endif
 
     hwp3_debug("HWP3.x: Information Block @ offset %llu\n", infoloc);
 
 #if HAVE_JSON
     if (ctx->options & CL_SCAN_FILE_PROPERTIES) {
-        infoblk_1 = cli_jsonarray(ctx->wrkproperty, "InfoBlk_1");
+        infoblk_1 = cli_jsonobj(ctx->wrkproperty, "InfoBlk_1");
         if (!infoblk_1) {
             cli_errmsg("HWP5.x: No memory for information block object\n");
+            return CL_EMEM;
+        }
+
+        contents = cli_jsonarray(infoblk_1, "Contents");
+        if (!contents) {
+            cli_errmsg("HWP5.x: No memory for information block contents array\n");
             return CL_EMEM;
         }
 
@@ -1489,7 +1525,7 @@ static inline int parsehwp3_infoblk_1(cli_ctx *ctx, fmap_t *dmap, off_t *offset,
 #endif
 
     if (fmap_readn(map, &infoid, (*offset), sizeof(infoid)) != sizeof(infoid)) {
-        cli_errmsg("HWP3.x: Failed to read infomation block id @ %llu\n",
+        cli_errmsg("HWP3.x: Failed to read information block id @ %llu\n",
                    (long long unsigned)(*offset));
         return CL_EREAD;
     }
@@ -1498,7 +1534,7 @@ static inline int parsehwp3_infoblk_1(cli_ctx *ctx, fmap_t *dmap, off_t *offset,
 
 #if HAVE_JSON
     if (ctx->options & CL_SCAN_FILE_PROPERTIES) {
-        entry = cli_jsonobj(infoblk_1, NULL);
+        entry = cli_jsonobj(contents, NULL);
         if (!entry) {
             cli_errmsg("HWP5.x: No memory for information block entry object\n");
             return CL_EMEM;
@@ -1511,16 +1547,16 @@ static inline int parsehwp3_infoblk_1(cli_ctx *ctx, fmap_t *dmap, off_t *offset,
 
     /* Booking Information(5) - no length field and no content */
     if (infoid == 5) {
-        hwp3_debug("HWP3.x: Information Block[%llu]: TYPE: Booking Infomation\n", infoloc);
+        hwp3_debug("HWP3.x: Information Block[%llu]: TYPE: Booking Information\n", infoloc);
 #if HAVE_JSON
         if (ctx->options & CL_SCAN_FILE_PROPERTIES)
-            cli_jsonstr(entry, "Type", "Booking Infomation");
+            cli_jsonstr(entry, "Type", "Booking Information");
 #endif
         return CL_SUCCESS;
     }
 
     if (fmap_readn(map, &infolen, (*offset), sizeof(infolen)) != sizeof(infolen)) {
-        cli_errmsg("HWP3.x: Failed to read infomation block len @ %llu\n",
+        cli_errmsg("HWP3.x: Failed to read information block len @ %llu\n",
                    (long long unsigned)(*offset));
         return CL_EREAD;
     }
@@ -1566,7 +1602,7 @@ static inline int parsehwp3_infoblk_1(cli_ctx *ctx, fmap_t *dmap, off_t *offset,
 #if HWP3_DEBUG /* additional fields can be added */
         memset(field, 0, HWP3_FIELD_LENGTH);
         if (fmap_readn(map, field, (*offset), 16) != 16) {
-            cli_errmsg("HWP3.x: Failed to read infomation block field @ %llu\n",
+            cli_errmsg("HWP3.x: Failed to read information block field @ %llu\n",
                        (long long unsigned)(*offset));
             return CL_EREAD;
         }
@@ -1574,7 +1610,7 @@ static inline int parsehwp3_infoblk_1(cli_ctx *ctx, fmap_t *dmap, off_t *offset,
 
         memset(field, 0, HWP3_FIELD_LENGTH);
         if (fmap_readn(map, field, (*offset)+16, 16) != 16) {
-            cli_errmsg("HWP3.x: Failed to read infomation block field @ %llu\n",
+            cli_errmsg("HWP3.x: Failed to read information block field @ %llu\n",
                        (long long unsigned)(*offset));
             return CL_EREAD;
         }
@@ -1594,7 +1630,7 @@ static inline int parsehwp3_infoblk_1(cli_ctx *ctx, fmap_t *dmap, off_t *offset,
             ret = cli_map_scan(map, (*offset), infolen, ctx, CL_TYPE_ANY);
         break;
     case 3: /* Hypertext/Hyperlink Information */
-        hwp3_debug("HWP3.x: Information Block[%llu]: TYPE: Hypertext/Hyperlink Infomation\n", infoloc);
+        hwp3_debug("HWP3.x: Information Block[%llu]: TYPE: Hypertext/Hyperlink Information\n", infoloc);
         if (infolen % 617) {
             cli_errmsg("HWP3.x: Information Block[%llu]: Invalid multiple of 617 => %u\n", infoloc, infolen);
             return CL_EFORMAT;
@@ -1604,7 +1640,7 @@ static inline int parsehwp3_infoblk_1(cli_ctx *ctx, fmap_t *dmap, off_t *offset,
         hwp3_debug("HWP3.x: Information Block[%llu]: COUNT: %d entries\n", infoloc, count);
 #if HAVE_JSON
         if (ctx->options & CL_SCAN_FILE_PROPERTIES) {
-            cli_jsonstr(entry, "Type", "Hypertext/Hyperlink Infomation");
+            cli_jsonstr(entry, "Type", "Hypertext/Hyperlink Information");
             cli_jsonint(entry, "Count", count);
         }
 #endif
@@ -1613,7 +1649,7 @@ static inline int parsehwp3_infoblk_1(cli_ctx *ctx, fmap_t *dmap, off_t *offset,
 #if HWP3_DEBUG /* additional fields can be added */
             memset(field, 0, HWP3_FIELD_LENGTH);
             if (fmap_readn(map, field, (*offset), 256) != 256) {
-                cli_errmsg("HWP3.x: Failed to read infomation block field @ %llu\n",
+                cli_errmsg("HWP3.x: Failed to read information block field @ %llu\n",
                            (long long unsigned)(*offset));
                 return CL_EREAD;
             }
@@ -1633,7 +1669,7 @@ static inline int parsehwp3_infoblk_1(cli_ctx *ctx, fmap_t *dmap, off_t *offset,
         break;
     case 5: /* Booking Information */
         /* should never run this as it is short-circuited above */
-        hwp3_debug("HWP3.x: Information Block[%llu]: TYPE: Booking Infomation\n", infoloc);
+        hwp3_debug("HWP3.x: Information Block[%llu]: TYPE: Booking Information\n", infoloc);
 #if HAVE_JSON
         if (ctx->options & CL_SCAN_FILE_PROPERTIES)
             cli_jsonstr(entry, "Type", "Booking Information");
@@ -1650,7 +1686,7 @@ static inline int parsehwp3_infoblk_1(cli_ctx *ctx, fmap_t *dmap, off_t *offset,
 #if HWP3_DEBUG /* additional fields can be added */
         memset(field, 0, HWP3_FIELD_LENGTH);
         if (fmap_readn(map, field, (*offset)+24, 256) != 256) {
-            cli_errmsg("HWP3.x: Failed to read infomation block field @ %llu\n",
+            cli_errmsg("HWP3.x: Failed to read information block field @ %llu\n",
                        (long long unsigned)(*offset));
             return CL_EREAD;
         }
@@ -1826,6 +1862,12 @@ int cli_scanhwp3(cli_ctx *ctx)
 
     offset += HWP3_DOCSUMMARY_SIZE;
 
+    /* password-protected document - cannot parse */
+    if (docinfo.di_passwd) {
+        cli_dbgmsg("HWP3.x: password-protected file, skip parsing\n");
+        return CL_SUCCESS;
+    }
+
     if (docinfo.di_infoblksize) {
         /* OPTIONAL TODO: HANDLE OPTIONAL INFORMATION BLOCK #0's FOR PRECLASS */
         offset += docinfo.di_infoblksize;
@@ -1850,7 +1892,7 @@ static const struct key_entry hwpml_keys[] = {
     { "hwpml",              "HWPML",              MSXML_JSON_ROOT | MSXML_JSON_ATTRIB },
 
     /* HEAD - Document Properties */
-    { "head",               "Head",               MSXML_JSON_WRKPTR },
+    //{ "head",               "Head",               MSXML_JSON_WRKPTR },
     { "docsummary",         "DocumentProperties", MSXML_JSON_WRKPTR },
     { "title",              "Title",              MSXML_JSON_WRKPTR | MSXML_JSON_VALUE },
     { "author",             "Author",             MSXML_JSON_WRKPTR | MSXML_JSON_VALUE },
@@ -1858,8 +1900,8 @@ static const struct key_entry hwpml_keys[] = {
     { "docsetting",         "DocumentSettings",   MSXML_JSON_WRKPTR },
     { "beginnumber",        "BeginNumber",        MSXML_JSON_WRKPTR | MSXML_JSON_ATTRIB },
     { "caretpos",           "CaretPos",           MSXML_JSON_WRKPTR | MSXML_JSON_ATTRIB },
-    { "bindatalist",        "BinDataList",        MSXML_JSON_WRKPTR },
-    { "binitem",            "BinItem",            MSXML_JSON_WRKPTR | MSXML_JSON_ATTRIB },
+    //{ "bindatalist",        "BinDataList",        MSXML_JSON_WRKPTR },
+    //{ "binitem",            "BinItem",            MSXML_JSON_WRKPTR | MSXML_JSON_ATTRIB },
     { "facenamelist",       "FaceNameList",       MSXML_IGNORE_ELEM }, /* fonts list */
     { "borderfilllist",     "BorderFillList",     MSXML_IGNORE_ELEM }, /* borders list */
     { "charshapelist",      "CharShapeList",      MSXML_IGNORE_ELEM }, /* character shapes */
@@ -1873,7 +1915,7 @@ static const struct key_entry hwpml_keys[] = {
     { "body",               "Body",               MSXML_IGNORE_ELEM }, /* document contents (we could build a document contents summary */
 
     /* TAIL - Document Attachments */
-    { "tail",               "Tail",               MSXML_JSON_WRKPTR },
+    //{ "tail",               "Tail",               MSXML_JSON_WRKPTR },
     { "bindatastorage",     "BinaryDataStorage",  MSXML_JSON_WRKPTR },
     { "bindata",            "BinaryData",         MSXML_SCAN_CB | MSXML_JSON_WRKPTR | MSXML_JSON_ATTRIB },
     { "scriptcode",         "ScriptCodeStorage",  MSXML_JSON_WRKPTR | MSXML_JSON_ATTRIB },
@@ -1885,13 +1927,18 @@ static size_t num_hwpml_keys = sizeof(hwpml_keys) / sizeof(struct key_entry);
 /* binary streams needs to be base64-decoded then decompressed if fields are set */
 static int hwpml_scan_cb(void *cbdata, int fd, cli_ctx *ctx)
 {
+    if (fd < 0 || !ctx)
+        return CL_ENULLARG;
+
     return cli_magic_scandesc(fd, ctx);
 }
 
-static int hwpml_binary_cb(int fd, cli_ctx *ctx, int num_attribs, struct attrib_entry *attribs)
+static int hwpml_binary_cb(int fd, cli_ctx *ctx, int num_attribs, struct attrib_entry *attribs, void *cbdata)
 {
     int i, ret, df = 0, com = 0, enc = 0;
     char *tempfile;
+
+    UNUSEDPARAM(cbdata);
 
     /* check attributes for compression and encoding */
     for (i = 0; i < num_attribs; i++) {
@@ -1945,7 +1992,7 @@ static int hwpml_binary_cb(int fd, cli_ctx *ctx, int num_attribs, struct attrib_
             return CL_EMAP;
         }
 
-        decoded = (char *)cl_base64_decode(instream, input->len, NULL, &decodedlen, 0);
+        decoded = (char *)cl_base64_decode((char *)instream, input->len, NULL, &decodedlen, 0);
         funmap(input);
         if (!decoded) {
             cli_errmsg("HWPML: Failed to get base64 decode binary data\n");
@@ -2013,6 +2060,7 @@ int cli_scanhwpml(cli_ctx *ctx)
 {
 #if HAVE_LIBXML2
     struct msxml_cbdata cbdata;
+    struct msxml_ctx mxctx;
     xmlTextReaderPtr reader = NULL;
     int state, ret = CL_SUCCESS;
 
@@ -2026,7 +2074,7 @@ int cli_scanhwpml(cli_ctx *ctx)
 
     reader = xmlReaderForIO(msxml_read_cb, NULL, &cbdata, "hwpml.xml", NULL, CLAMAV_MIN_XMLREADER_FLAGS);
     if (!reader) {
-        cli_dbgmsg("cli_scanhwpml: cannot intialize xmlReader\n");
+        cli_dbgmsg("cli_scanhwpml: cannot initialize xmlReader\n");
 
 #if HAVE_JSON
         ret = cli_json_parse_error(ctx->wrkproperty, "HWPML_ERROR_XML_READER_IO");
@@ -2034,7 +2082,9 @@ int cli_scanhwpml(cli_ctx *ctx)
         return ret; // libxml2 failed!
     }
 
-    ret = cli_msxml_parse_document(ctx, reader, hwpml_keys, num_hwpml_keys, 1, hwpml_binary_cb);
+    memset(&mxctx, 0, sizeof(mxctx));
+    mxctx.scan_cb = hwpml_binary_cb;
+    ret = cli_msxml_parse_document(ctx, reader, hwpml_keys, num_hwpml_keys, MSXML_FLAG_JSON, &mxctx);
 
     xmlTextReaderClose(reader);
     xmlFreeTextReader(reader);

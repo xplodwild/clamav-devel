@@ -275,13 +275,22 @@ int scan_callback(STATBUF *sb, char *filename, const char *msg, enum cli_ftw_rea
 
     if (ret == CL_VIRUS) {
         scandata->infected++;
+
         if (scandata->options & CL_SCAN_ALLMATCHES) {
+            if(optget(scandata->opts, "PreludeEnable")->enabled){
+                prelude_logging(filename, virname, context.virhash, context.virsize);
+            }
             virusaction(filename, virname, scandata->opts);
         } else {
             if (conn_reply_virus(scandata->conn, filename, virname) == -1) {
                 free(filename);
                 return CL_ETIMEOUT;
             }
+
+            if(optget(scandata->opts, "PreludeEnable")->enabled){
+                prelude_logging(filename, virname, context.virhash, context.virsize);
+            }
+
             if(context.virsize && optget(scandata->opts, "ExtendedDetectionInfo")->enabled)
                 logg("~%s: %s(%s:%llu) FOUND\n", filename, virname, context.virhash, context.virsize);
             else

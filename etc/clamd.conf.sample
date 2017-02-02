@@ -56,6 +56,14 @@ Example
 # Default: no
 #LogRotate yes
 
+# Enable Prelude output.
+# Default: no
+#PreludeEnable yes
+#
+# Set the name of the analyzer used by prelude-admin.
+# Default: ClamAV
+#PreludeAnalyzerName ClamAV
+
 # Log additional information about the infected file, such as its
 # size and hash, together with the virus name.
 #ExtendedDetectionInfo yes
@@ -140,7 +148,7 @@ Example
 # Default: 5
 #CommandReadTimeout 5
 
-# This option specifies how long to wait (in miliseconds) if the send buffer is full.
+# This option specifies how long to wait (in milliseconds) if the send buffer is full.
 # Keep this value low to prevent clamd hanging
 #
 # Default: 500
@@ -193,10 +201,6 @@ Example
 # Run as another user (clamd must be started by root for this option to work)
 # Default: don't drop privileges
 #User clamav
-
-# Initialize supplementary group access (clamd must be started by root).
-# Default: no
-#AllowSupplementaryGroups no
 
 # Stop daemon when libclamav reports out of memory condition.
 #ExitOnOOM yes
@@ -317,6 +321,18 @@ Example
 # without decoding and additional processing.
 # Default: yes
 #ScanSWF yes
+
+# This option enables scanning xml-based document files supported by libclamav.
+# If you turn off this option, the original files will still be scanned, but
+# without additional processing.
+# Default: yes
+#ScanXMLDOCS yes
+
+# This option enables scanning of HWP3 files.
+# If you turn off this option, the original files will still be scanned, but
+# without additional processing.
+# Default: yes
+#ScanHWP3 yes
 
 
 ##
@@ -554,6 +570,10 @@ Example
 # Default: 25M
 #PCREMaxFileSize 100M
 
+# When BlockMax is set, files exceeding the MaxFileSize, MaxScanSize, or MaxRecursion limit will be flagged
+# with the virus "Heuristic.Limits.Exceeded".
+# Default: no
+#BlockMax yes
 
 ##
 ## On-access Scan Settings
@@ -636,7 +656,7 @@ Example
 # Default: TrustSigned
 #BytecodeSecurity TrustSigned
 
-# Set bytecode timeout in miliseconds.
+# Set bytecode timeout in milliseconds.
 # 
 # Default: 5000
 # BytecodeTimeout 1000

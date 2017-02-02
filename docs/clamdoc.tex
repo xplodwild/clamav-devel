@@ -1,6 +1,6 @@
 %  Clam AntiVirus: User Manual
 %
-%  Copyright (C) 2014 Cisco Systems, Inc.
+%  Copyright (C) 2016 Cisco Systems, Inc.
 %  Copyright (C) 2008-2013 Sourcefire, Inc.
 %  Copyright (C) 2002 - 2007 Tomasz Kojm <tkojm*clamav.net>
 %  Version 0.2x corrected by Dennis Leeuw <dleeuw*made-it.com>
@@ -72,7 +72,7 @@
     \vspace{3cm}
     \begin{flushright}
 	\rule[-1ex]{8cm}{3pt}\\
-	\huge Clam AntiVirus 0.99\\
+	\huge Clam AntiVirus 0.99.2\\
 	\huge \emph{User Manual}\\
     \end{flushright}
 
@@ -84,7 +84,7 @@
     \noindent
     \begin{boxedminipage}[b]{\textwidth}
     ClamAV User Manual,
-    \copyright \  2014 Cisco Systems, Inc.
+    \copyright \  2016 Cisco Systems, Inc.
     Authors: Tomasz Kojm\\
     This document is distributed under the terms of the GNU General
     Public License v2.\\
@@ -350,8 +350,8 @@
     the LLVM configuration utility (llvm-config). With no argument to \verb+--with-system-llvm+,
     \verb+./configure+ will search for LLVM in /usr/local/ and then /usr.
     \\\\
-    Recommended versions of LLVM are 3.2, 3.3, 3.4, and 3.5. Some installations have
-    reported problems using earlier LLVM versions. Versions of LLVM beyond 3.5 are not
+    Recommended versions of LLVM are 3.2, 3.3, 3.4, 3.5, and 3.6. Some installations have
+    reported problems using earlier LLVM versions. Versions of LLVM beyond 3.6 are not
     currently supported in ClamAV.
 
     \subsection{Running unit tests}\label{unit-testing}
@@ -472,7 +472,7 @@ $ CK_FORK=no ./libtool --mode=execute valgrind unit_tests/check-clamav
     One of the interesting features of \verb+clamd+ is on-access scanning
     based on fanotify, included in Linux since kernel 2.6.36.
     \textbf{This is not required to run clamd}. At the moment the fanotify header is
-    only avaliable for Linux.
+    only available for Linux.
     \\\\
     Configure on-access scanning in \verb+clamd.conf+ and read the 
     \ref{On-access} section for on-access scanning usage.
@@ -754,7 +754,7 @@ N * * * *	/usr/local/bin/freshclam --quiet
 	      OnAccessMountPath option. While this will disable on-access prevention,
 	      it will avoid potential system lockups caused by fanotify's blocking
 	      functionality.
-	\item Using the On-Access Scanner to watch a virtual filesytem will result
+	\item Using the On-Access Scanner to watch a virtual filesystem will result
 	      in undefined behaviour.
     \end{itemize}
     The default configuration utilizes inotify to recursively keep track of
@@ -812,7 +812,7 @@ N * * * *	/usr/local/bin/freshclam --quiet
     \subsection{Freshclam}\label{sec:freshclam}
     \verb+freshclam+ is ClamAV's virus database update tool and reads it's
     configuration from the file 'freshclam.conf' (this may be
-    overriden by command line options). Freshclam's default behavior is to
+    overridden by command line options). Freshclam's default behavior is to
     attempt to update databases that are paired with downloaded cdiffs.
     Potentially corrupted databases are not updated and are automatically
     fully replaced after several failed attempts unless otherwise specified.
@@ -951,8 +951,8 @@ Engine flevel: 77, dconf: 77
     scans within archives, mail files, MS Office document files, executables
     and other special formats.
 
-    \subsection{Licence}
-    Libclamav is licensed under the GNU GPL v2 licence. This means you are
+    \subsection{License}
+    Libclamav is licensed under the GNU GPL v2 license. This means you are
     \textbf{not allowed} to link commercial, closed-source software
     against it. All software using libclamav must be GPL compliant.
 
@@ -1055,9 +1055,10 @@ Engine flevel: 77, dconf: 77
 
     \subsubsection{Initialization}
     Before using libclamav, you should call \verb+cl_init()+ to initialize
-    it. When it's done, you're ready to create a new scan engine by calling
-    \verb+cl_engine_new()+. To free resources allocated by the engine use
-    \verb+cl_engine_free()+. Function prototypes:
+    it. \verb+CL_INIT_DEFAULT+ is a macro that can be passed to \verb+cl_init()+
+    representing the default initialization settings. When it's done, you're ready
+    to create a new scan engine by calling \verb+cl_engine_new()+. To free resources
+    allocated by the engine use \verb+cl_engine_free()+. Function prototypes:
     \begin{verbatim}
 	int cl_init(unsigned int options);
 	struct cl_engine *cl_engine_new(void);
@@ -1108,7 +1109,7 @@ Engine flevel: 77, dconf: 77
 	    unsigned int sigs = 0;
 	    int ret;
 
-	if((ret = cl_init()) != CL_SUCCESS) {
+	if((ret = cl_init(CL_INIT_DEFAULT)) != CL_SUCCESS) {
 	    printf("cl_init() error: %s\n", cl_strerror(ret));
 	    return 1;
 	}
@@ -1188,7 +1189,7 @@ const char *cl_engine_get_str(const struct cl_engine *engine,
 	cl_statinidir(dbdir, &dbstat);
     \end{verbatim}
     To check for a change you just need to call \verb+cl_statchkdir+ and check
-    its return value (0 - no change, 1 - some change occured). Remember to reset
+    its return value (0 - no change, 1 - some change occurred). Remember to reset
     the \verb+cl_stat+ structure after reloading the database.
     \begin{verbatim}
 	if(cl_statchkdir(&dbstat) == 1) {
@@ -1817,6 +1818,9 @@ Verification OK.
 	Role: ClamAV developer
 
 	\item Samir Sapra \email{<ssapra*cisco.com>}, USA\\
+	Role: ClamAV developer
+
+	\item Mickey Sola \email{<micksola*cisco.com>}, USA\\
 	Role: ClamAV developer
 
 	\item Alain Zidouemba \email{<azidouem*cisco.com>}, USA\\

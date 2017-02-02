@@ -72,7 +72,7 @@
  * in re-enabling affected modules.
  */
 
-#define CL_FLEVEL 82
+#define CL_FLEVEL 83
 #define CL_FLEVEL_DCONF	CL_FLEVEL
 #define CL_FLEVEL_SIGTOOL CL_FLEVEL
 
@@ -126,6 +126,11 @@ typedef struct bitset_tag
         unsigned long length;
 } bitset_t;
 
+typedef struct cli_ctx_container_tag {
+    cli_file_t type;
+    size_t size;
+} cli_ctx_container;
+
 /* internal clamav context */
 typedef struct cli_ctx_tag {
     const char **virname;
@@ -140,8 +145,7 @@ typedef struct cli_ctx_tag {
     unsigned int found_possibly_unwanted;
     unsigned int corrupted_input;
     unsigned int img_validate;
-    cli_file_t container_type; /* FIXME: to be made into a stack or array - see bb#1579 & bb#1293 */
-    size_t container_size;
+    cli_ctx_container *containers; /* set container type after recurse */
     unsigned char handlertype_hash[16];
     struct cli_dconf *dconf;
     fmap_t **fmap;
@@ -157,6 +161,7 @@ typedef struct cli_ctx_tag {
     struct json_object *wrkproperty;
 #endif
     struct timeval time_limit;
+    int limit_exceeded;
 } cli_ctx;
 
 #define STATS_ANON_UUID "5b585e8f-3be5-11e3-bf0b-18037319526c"
@@ -271,7 +276,7 @@ struct cl_engine {
 				     * within a single archive
 				     */
     /* This is for structured data detection.  You can set the minimum
-     * number of occurences of an CC# or SSN before the system will
+     * number of occurrences of an CC# or SSN before the system will
      * generate a notification.
      */
     uint32_t min_cc_count;
@@ -284,6 +289,8 @@ struct cl_engine {
     struct cli_matcher *hm_hdb;
     /* hash matcher for MD5 sigs for PE sections */
     struct cli_matcher *hm_mdb;
+    /* hash matcher for MD5 sigs for PE import tables */
+    struct cli_matcher *hm_imp;
     /* hash matcher for whitelist db */
     struct cli_matcher *hm_fp;
 
@@ -305,6 +312,11 @@ struct cl_engine {
 
     /* Container password storage */
     struct cli_pwdb **pwdbs;
+
+    /* Pre-loading test matcher
+     * Test for presence before using; cleared on engine compile.
+     */
+    struct cli_matcher *test_root;
 
     /* Ignored signatures */
     struct cli_matcher *ignored;
@@ -466,13 +478,15 @@ extern int have_rar;
 #define SCAN_ELF	    (ctx->options & CL_SCAN_ELF)
 #define SCAN_ALGO 	    (ctx->options & CL_SCAN_ALGORITHMIC)
 #define DETECT_ENCRYPTED    (ctx->options & CL_SCAN_BLOCKENCRYPTED)
-/* #define BLOCKMAX	    (ctx->options & CL_SCAN_BLOCKMAX) */
+#define BLOCKMAX	    (ctx->options & CL_SCAN_BLOCKMAX)
 #define DETECT_BROKEN	    (ctx->options & CL_SCAN_BLOCKBROKEN)
 #define BLOCK_MACROS	    (ctx->options & CL_SCAN_BLOCKMACROS)
 #define SCAN_STRUCTURED	    (ctx->options & CL_SCAN_STRUCTURED)
 #define SCAN_ALL            (ctx->options & CL_SCAN_ALLMATCHES)
 #define SCAN_SWF            (ctx->options & CL_SCAN_SWF)
 #define SCAN_PROPERTIES     (ctx->options & CL_SCAN_FILE_PROPERTIES)
+#define SCAN_XMLDOCS        (ctx->options & CL_SCAN_XMLDOCS)
+#define SCAN_HWP3           (ctx->options & CL_SCAN_HWP3)
 
 /* based on macros from A. Melnikoff */
 #define cbswap16(v) (((v & 0xff) << 8) | (((v) >> 8) & 0xff))
@@ -532,6 +546,7 @@ struct unaligned_ptr {
 #define	be16_to_host(v)	cbswap16(v)
 #define	be32_to_host(v)	cbswap32(v)
 #define be64_to_host(v) cbswap64(v)
+#define cli_readint64(buff) (((const union unaligned_64 *)(buff))->una_s64)
 #define cli_readint32(buff) (((const union unaligned_32 *)(buff))->una_s32)
 #define cli_readint16(buff) (((const union unaligned_16 *)(buff))->una_s16)
 #define cli_writeint32(offset, value) (((union unaligned_32 *)(offset))->una_u32=(uint32_t)(value))
@@ -543,6 +558,21 @@ struct unaligned_ptr {
 #define be16_to_host(v)	(v)
 #define be32_to_host(v)	(v)
 #define be64_to_host(v)	(v)
+
+static inline int32_t cli_readint64(const void *buff)
+{
+	int64_t ret;
+    ret = ((const char *)buff)[0] & 0xff;
+    ret |= (((const char *)buff)[1] & 0xff) << 8;
+    ret |= (((const char *)buff)[2] & 0xff) << 16;
+    ret |= (((const char *)buff)[3] & 0xff) << 24;
+
+    ret |= (((const char *)buff)[4] & 0xff) << 32;
+    ret |= (((const char *)buff)[5] & 0xff) << 40;
+    ret |= (((const char *)buff)[6] & 0xff) << 48;
+    ret |= (((const char *)buff)[7] & 0xff) << 56;
+    return ret;
+}
 
 static inline int32_t cli_readint32(const void *buff)
 {
@@ -574,6 +604,10 @@ static inline void cli_writeint32(void *offset, uint32_t value)
 void cli_append_virus(cli_ctx *ctx, const char *virname);
 const char *cli_get_last_virus(const cli_ctx *ctx);
 const char *cli_get_last_virus_str(const cli_ctx *ctx);
+
+void cli_set_container(cli_ctx *ctx, cli_file_t type, size_t size);
+cli_file_t cli_get_container_type(cli_ctx *ctx, int index);
+size_t cli_get_container_size(cli_ctx *ctx, int index);
 
 /* used by: spin, yc (C) aCaB */
 #define __SHIFTBITS(a) (sizeof(a)<<3)
@@ -669,6 +703,7 @@ void *cli_calloc(size_t nmemb, size_t size);
 void *cli_realloc(void *ptr, size_t size);
 void *cli_realloc2(void *ptr, size_t size);
 char *cli_strdup(const char *s);
+char *cli_strndup(const char *s, size_t n);
 int cli_rmdirs(const char *dirname);
 char *cli_hashstream(FILE *fs, unsigned char *digcpy, int type);
 char *cli_hashfile(const char *filename, int type);
@@ -686,6 +721,7 @@ void cli_bitset_free(bitset_t *bs);
 int cli_bitset_set(bitset_t *bs, unsigned long bit_offset);
 int cli_bitset_test(bitset_t *bs, unsigned long bit_offset);
 const char* cli_ctime(const time_t *timep, char *buf, const size_t bufsize);
+void cli_check_blockmax(cli_ctx *, int);
 int cli_checklimits(const char *, cli_ctx *, unsigned long, unsigned long, unsigned long);
 int cli_updatelimits(cli_ctx *, unsigned long);
 unsigned long cli_getsizelimit(cli_ctx *, unsigned long);

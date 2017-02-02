@@ -23,6 +23,8 @@ sbin_PROGRAMS = clamd
 clamd_SOURCES = \
     $(top_srcdir)/shared/output.c \
     $(top_srcdir)/shared/output.h \
+    $(top_srcdir)/shared/idmef_logging.c \
+    $(top_srcdir)/shared/idmef_logging.h \
     $(top_srcdir)/shared/optparser.c \
     $(top_srcdir)/shared/optparser.h \
     $(top_srcdir)/shared/getopt.c \
@@ -55,6 +57,10 @@ clamd_SOURCES = \
     onaccess_scth.h
 
 AM_CFLAGS=@WERR_CFLAGS@
+
+if INSTALL_SYSTEMD_UNITS
+systemdsystemunit_DATA = clamav-daemon.socket clamav-daemon.service
+endif
 
 endif
 
